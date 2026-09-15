@@ -282,7 +282,7 @@ class RecorderManager:
         self._close_scrcpy(str(device_id))
         return {"closed": True}
 
-    def connect_android_wireless(self, host: object, port: object, pairing_code: object = "") -> dict[str, str]:
+    def connect_android_wireless(self, host: object, port: object, pairing_code: object = "") -> dict[str, Any]:
         try:
             address = ipaddress.ip_address(str(host).strip())
             endpoint_port = int(str(port).strip())
@@ -409,10 +409,10 @@ class RecorderManager:
                     self._touch_state[slot] = previous if previous in {"0", "1"} else "0"
                 _run([executable, "-s", device_id, "shell", "settings", "put", "system", "show_touches", "1"], timeout=10)
                 return
-            previous = self._touch_state.get(slot)
-            if previous is None:
+            pending = self._touch_state.get(slot)
+            if pending is None:
                 return
-            result = _run([executable, "-s", device_id, "shell", "settings", "put", "system", "show_touches", previous], timeout=10)
+            result = _run([executable, "-s", device_id, "shell", "settings", "put", "system", "show_touches", pending], timeout=10)
             # Se olvida sólo si la reposición llegó: si el dispositivo se perdió a media
             # sesión, queda pendiente para el próximo intento en vez de dejarlo encendido.
             if result.returncode == 0:

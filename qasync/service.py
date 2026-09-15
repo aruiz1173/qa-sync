@@ -274,7 +274,7 @@ class QASyncService:
     def discover_android_wireless(self) -> dict[str, Any]:
         return self.recorder.discover_android_wireless()
 
-    def connect_android_wireless(self, request: dict[str, Any]) -> dict[str, str]:
+    def connect_android_wireless(self, request: dict[str, Any]) -> dict[str, Any]:
         return self.recorder.connect_android_wireless(
             request.get("host", ""), request.get("port", ""), request.get("pairing_code", ""),
         )
