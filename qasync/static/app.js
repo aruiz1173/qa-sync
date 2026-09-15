@@ -130,7 +130,27 @@ async function rollbackBackup(button){
 }
 
 const selectedPlatform=()=>document.querySelector('input[name="platform"]:checked').value;
-function renderDevices(){const platform=selectedPlatform();const list=state.devices[platform]||[];const unavailable=state.devices[`${platform}_unavailable`]||[];const mirrors=state.devices.mirrors||{};const ready=list.map(d=>`<option value="${escapeHtml(d.id)}">${escapeHtml(d.name)} · ${escapeHtml(d.kind)}${mirrors[d.id]?' · espejo abierto':''}</option>`);const blocked=unavailable.map(d=>`<option value="" disabled>${escapeHtml(d.name)} · ${escapeHtml(d.kind)}</option>`);$('#device-select').innerHTML=ready.length||blocked.length?[...ready,...blocked].join(''):'<option value="">Ningún dispositivo disponible</option>'}
+// Sin simctl (macOS) ni un Appium remoto no existe ningún camino a iOS, así que
+// elegirlo sólo llevaba a una lista vacía. Se desactiva y se dice por qué.
+function applyPlatformSupport(){
+  const caps=state.devices.capabilities||{};
+  const iosPossible=Boolean(caps.simctl||caps.appium);
+  const input=document.querySelector('input[name="platform"][value="ios"]');
+  if(!input)return iosPossible;
+  input.disabled=!iosPossible;
+  const label=input.closest('label');
+  if(label){
+    label.classList.toggle('unsupported',!iosPossible);
+    label.title=iosPossible?'':'iOS necesita macOS con Xcode o un Appium remoto en una Mac.';
+  }
+  if(!iosPossible&&input.checked){
+    const android=document.querySelector('input[name="platform"][value="android"]');
+    if(android)android.checked=true;
+  }
+  return iosPossible;
+}
+
+function renderDevices(){applyPlatformSupport();const platform=selectedPlatform();const list=state.devices[platform]||[];const unavailable=state.devices[`${platform}_unavailable`]||[];const mirrors=state.devices.mirrors||{};const ready=list.map(d=>`<option value="${escapeHtml(d.id)}">${escapeHtml(d.name)} · ${escapeHtml(d.kind)}${mirrors[d.id]?' · espejo abierto':''}</option>`);const blocked=unavailable.map(d=>`<option value="" disabled>${escapeHtml(d.name)} · ${escapeHtml(d.kind)}</option>`);$('#device-select').innerHTML=ready.length||blocked.length?[...ready,...blocked].join(''):'<option value="">Ningún dispositivo disponible</option>'}
 async function refreshDevices(){$('#refresh-devices').disabled=true;try{state.devices=await getJson('/api/devices');renderDevices();const relevant=(state.devices.errors||[]).filter(item=>item.toLowerCase().startsWith(selectedPlatform()));if(relevant.length)showToast(relevant.join(' '),true)}catch(error){showToast(error.message,true)}finally{$('#refresh-devices').disabled=false}}
 async function discoverWireless(){
   const button=$('#discover-wireless');button.disabled=true;

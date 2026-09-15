@@ -51,3 +51,5 @@ dialog{width:min(590px,calc(100% - 32px));padding:0;border:0;border-radius:var(-
 .run-config{display:inline-block;margin:0 0 2px;padding:1px 7px;border-radius:999px;background:var(--color-primary);color:#fff;font-size:9px;font-weight:650;letter-spacing:.02em}
 .dialog-target{margin:-4px 0 14px;padding:8px 11px;border:1px solid var(--color-border);border-radius:var(--radius-sm);background:var(--color-background);color:var(--color-text);font-size:12px;font-weight:650}
 .edit-step textarea.invalid{border-color:#c2410c;background:#fff7ed;box-shadow:0 0 0 2px rgba(194,65,12,.12)}
+.segmented label.unsupported{opacity:.45}
+.segmented label.unsupported span{cursor:not-allowed}
