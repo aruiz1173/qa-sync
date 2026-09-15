@@ -1386,6 +1386,41 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(case["preconditions"], "Signed in")
 
     @patch("qasync.service.TestRailClient")
+    def test_device_list_comes_from_testrail_not_from_the_app(self, client_type):
+        # Los equipos reciclan los mismos casos entre dispositivos, y la lista ya vive
+        # en las configuraciones del proyecto: mantenerla en la app la dejaría vieja.
+        client_type.return_value.get_configs.return_value = [
+            {"id": 196, "name": "Devices", "configs": [
+                {"id": 1354, "name": "Android Phone"},
+                {"id": 1610, "name": "Android Tablet"},
+                {"id": 1491, "name": "T3a"},
+                "basura",
+            ]},
+            {"id": 202, "name": "Countries", "configs": [{"id": 1464, "name": "en_US"}]},
+            {"id": 245, "name": "Web", "configs": []},
+        ]
+        groups = QASyncService(config()).device_configs({"project_id": 103})["groups"]
+        # Se devuelven todos los grupos: otro proyecto puede nombrarlo distinto o tener
+        # varios ejes, como el de países que este ya tiene.
+        self.assertEqual([group["name"] for group in groups], ["Devices", "Countries", "Web"])
+        self.assertEqual(
+            [option["name"] for option in groups[0]["options"]],
+            ["Android Phone", "Android Tablet", "T3a"],
+        )
+        client_type.return_value.get_configs.assert_called_once_with(103)
+
+    def test_target_device_travels_from_the_request_to_the_backup(self):
+        proposal = Proposal(
+            7, "android", {}, {}, time.time(),
+            target_config="Android Phone", usage={"model_calls": 1}, environment={"model": "SM-T733"},
+        )
+        # Añadir un campo al dataclass corría los posicionales: usage terminaba en
+        # target_config y environment en usage.
+        self.assertEqual(proposal.target_config, "Android Phone")
+        self.assertEqual(proposal.usage, {"model_calls": 1})
+        self.assertEqual(proposal.environment, {"model": "SM-T733"})
+
+    @patch("qasync.service.TestRailClient")
     def test_style_samples_come_from_the_same_section(self, client_type):
         client = client_type.return_value
         client.get_cases.return_value = [

@@ -168,7 +168,31 @@ async function disconnectWireless(){
 }
 
 async function connectWireless(){const button=$('#connect-wireless');button.disabled=true;try{const result=await api('/api/device/android-wireless',{host:$('#wireless-host').value,port:$('#wireless-port').value,pairing_code:$('#wireless-code').value});$('#wireless-code').value='';showToast(`Android conectado: ${result.endpoint}`);await refreshDevices()}catch(error){showToast(error.message,true)}finally{button.disabled=false}}
-function openUpdateDialog(){if(!state.currentCase)return;$('#dialog-case').textContent=`C${state.currentCase.id} · ${state.currentCase.title}`;$('#dialog-target').textContent=runConfig(state.activeRun)?`Este run apunta a: ${runConfig(state.activeRun)}`:'';$('#dialog-target').hidden=!runConfig(state.activeRun);$('#device-step').hidden=false;$('#recording-step').hidden=true;$('#continue-update').textContent='Adelante';$('#cancel-update').textContent='Cancelar';$('#update-dialog').showModal();refreshDevices()}
+// La lista de dispositivos vive en las configuraciones del proyecto en TestRail:
+// así cada proyecto trae la suya y un dispositivo nuevo no requiere tocar la app.
+async function loadTargetConfigs(){
+  const select=$('#target-config');
+  const projectId=state.activeRun?.project_id||$('#project-select').value;
+  const preset=runConfig(state.activeRun);
+  select.innerHTML='<option value="">Sin especificar</option>';
+  if(!projectId)return;
+  try{
+    const data=await api('/api/device-configs',{project_id:projectId});
+    for(const group of data.groups||[]){
+      if(!group.options?.length)continue;
+      const optgroup=document.createElement('optgroup');optgroup.label=group.name||'Configuración';
+      for(const option of group.options){
+        const el=document.createElement('option');el.value=option.name;el.textContent=option.name;
+        optgroup.appendChild(el);
+      }
+      select.appendChild(optgroup);
+    }
+    // El run ya dice a qué apunta: se preselecciona en vez de hacerlo elegir de nuevo.
+    if(preset&&[...select.options].some(option=>option.value===preset))select.value=preset;
+  }catch(error){showToast(`No se pudieron leer las configuraciones: ${error.message}`,true)}
+}
+
+function openUpdateDialog(){if(!state.currentCase)return;$('#dialog-case').textContent=`C${state.currentCase.id} · ${state.currentCase.title}`;$('#dialog-target').textContent=runConfig(state.activeRun)?`Este run apunta a: ${runConfig(state.activeRun)}`:'';$('#dialog-target').hidden=!runConfig(state.activeRun);$('#device-step').hidden=false;$('#recording-step').hidden=true;$('#continue-update').textContent='Adelante';$('#cancel-update').textContent='Cancelar';$('#update-dialog').showModal();refreshDevices();loadTargetConfigs()}
 async function closeUpdateDialog(){
   if(state.session){
     if(!window.confirm('¿Cancelar la grabación? Las capturas temporales se eliminarán.'))return;
@@ -220,7 +244,7 @@ async function continueUpdate(){
     catch(error){showToast(error.message,true)}finally{button.disabled=false}return;
   }
   button.disabled=true;button.textContent='Generando propuesta';clearInterval(state.timer);clearInterval(state.screenTimer);
-  try{await api('/api/record/stop',{session_id:state.session});const result=await api('/api/record/analyze',{session_id:state.session,case_id:state.currentCase.id,context:$('#context').value,project_id:state.activeRun?.project_id||$('#project-select').value});state.proposal=result;state.session=null;$('#update-dialog').close();renderProposal()}
+  try{await api('/api/record/stop',{session_id:state.session});const result=await api('/api/record/analyze',{session_id:state.session,case_id:state.currentCase.id,context:$('#context').value,project_id:state.activeRun?.project_id||$('#project-select').value,target_config:$('#target-config').value});state.proposal=result;state.session=null;$('#update-dialog').close();renderProposal()}
   catch(error){showToast(`${error.message} Puedes reintentar sin repetir el recorrido.`,true)}finally{button.disabled=false;button.textContent=state.session?'Reintentar análisis':'Adelante'}
 }
 

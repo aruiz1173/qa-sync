@@ -175,6 +175,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 result = self.service.validate_configuration()
             elif path == "/api/runs":
                 result = self.service.runs(payload)
+            elif path == "/api/device-configs":
+                result = self.service.device_configs(payload)
             elif path == "/api/plan-runs":
                 result = self.service.plan_runs(payload)
             elif path == "/api/run":

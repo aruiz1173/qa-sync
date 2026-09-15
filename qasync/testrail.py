@@ -176,6 +176,19 @@ class TestRailClient:
                 route += f"&{name}={value}"
         return self._all(route, "cases")
 
+    def get_configs(self, project_id: int) -> list[dict[str, Any]]:
+        """Grupos de configuración del proyecto: ahí vive la lista de dispositivos.
+
+        Se lee de TestRail en vez de mantenerse en la app para que cada proyecto
+        traiga la suya y un dispositivo nuevo aparezca sin cambiar código.
+        """
+        response = request_json(
+            self._url(f"get_configs/{project_id}"), headers=self._headers(), allow_list=True
+        )
+        if isinstance(response, list):
+            return [item for item in response if isinstance(item, dict)]
+        return self._collection(response, "configs")
+
     def get_plans(self, project_id: int) -> list[dict[str, Any]]:
         return self._all(f"get_plans/{project_id}&is_completed=0", "plans")
 

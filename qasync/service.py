@@ -33,6 +33,7 @@ class Proposal:
     device_name: str = ""
     device_version: str = ""
     vision_quality: str = "high"
+    target_config: str = ""
     usage: dict[str, int] | None = None
     environment: dict[str, str] | None = None
 
@@ -116,6 +117,7 @@ class ProposalStore:
             "provider_used": item.provider_used, "device_id": item.device_id,
             "device_name": item.device_name, "device_version": item.device_version,
             "vision_quality": item.vision_quality,
+            "target_config": item.target_config,
             "usage": item.usage or {},
             "environment": item.environment or {},
         } for token, item in self._items.items()}
@@ -232,6 +234,23 @@ class QASyncService:
         ]
         return {"runs": runs, "plans": plans}
 
+    def device_configs(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Configuraciones del proyecto, tal como están definidas en TestRail.
+
+        La lista de dispositivos no se mantiene en la app a propósito: cada proyecto
+        trae la suya y un dispositivo nuevo aparece sin tocar código ni ajustes.
+        """
+        project_id = normalize_case_id(request.get("project_id"))
+        groups = TestRailClient(self.config).get_configs(project_id)
+        return {"groups": [{
+            "id": group.get("id"),
+            "name": str(group.get("name", "")),
+            "options": [
+                {"id": item.get("id"), "name": str(item.get("name", ""))}
+                for item in group.get("configs", []) if isinstance(item, dict)
+            ],
+        } for group in groups]}
+
     def plan_runs(self, request: dict[str, Any]) -> dict[str, Any]:
         plan_id = normalize_case_id(request.get("plan_id"))
         runs = TestRailClient(self.config).get_plan_runs(plan_id)
@@ -325,6 +344,7 @@ class QASyncService:
             "device_version": environment.get("os_version") or device.get("kind", ""),
             "environment": environment,
             "project_id": request.get("project_id"),
+            "target_config": request.get("target_config", ""),
         })
         self.recorder.discard(session_id)
         return result
@@ -404,9 +424,12 @@ class QASyncService:
             case_id, platform, current, changes, time.time(), analysis["confidence"], analysis["warnings"],
             provider_used, str(request.get("device_id", ""))[:200],
             str(request.get("device_name", ""))[:200], str(request.get("device_version", ""))[:200],
-            self.config.vision_quality,
-            usage if isinstance(usage, dict) else {},
-            {str(key)[:80]: str(value)[:200] for key, value in request.get("environment", {}).items()} if isinstance(request.get("environment"), dict) else {},
+            # El resto va por nombre: añadir un campo al dataclass corría los
+            # posicionales y usage terminaba en otro campo.
+            vision_quality=self.config.vision_quality,
+            target_config=str(request.get("target_config", ""))[:200],
+            usage=usage if isinstance(usage, dict) else {},
+            environment={str(key)[:80]: str(value)[:200] for key, value in request.get("environment", {}).items()} if isinstance(request.get("environment"), dict) else {},
         )
         token = self.store.put(proposal)
         return self._proposal_response(token, proposal)
@@ -426,6 +449,7 @@ class QASyncService:
             "write_mode": self.config.write_mode,
             "provider_used": proposal.provider_used,
             "vision_quality": proposal.vision_quality,
+            "target_config": proposal.target_config,
             "usage": proposal.usage or {},
             "environment": proposal.environment or {},
             "device_id": proposal.device_id,
@@ -505,7 +529,7 @@ class QASyncService:
         backup_id = self.history.create(proposal.case_id, previous_fields, changes, {
             "platform": proposal.platform, "device_id": proposal.device_id,
             "device_name": proposal.device_name, "device_version": proposal.device_version,
-            "provider": proposal.provider_used,
+            "provider": proposal.provider_used, "target_config": proposal.target_config,
         })
         updated = client.update_case(proposal.case_id, changes)
         applied_fields = {key: updated.get(key, changes.get(key)) for key in changes}
