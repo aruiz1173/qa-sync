@@ -1,4 +1,5 @@
 import base64
+import email
 import io
 import json
 import os
@@ -8,6 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -22,6 +24,7 @@ from qasync.envfile import load_dotenv
 from qasync.errors import ConfigurationError, ExternalServiceError, UsageLimitError, ValidationError
 from qasync.executables import describe_untrusted, file_sha256, pinned_hashes, trusted_which
 from qasync.history import HistoryStore
+from qasync.http_client import request_json
 from qasync.recorder import RecorderManager, RecordingSession, _redacted_label, parse_adb_devices, parse_ios_devices, parse_xctrace_physical_devices
 from qasync.devices import adb_endpoint_result, parse_adb_mdns_services, parse_adb_tcpip_result, parse_android_ip, parse_scrcpy_major
 from qasync.service import Proposal, ProposalStore, QASyncService
@@ -134,6 +137,54 @@ class TestRailPaginationTests(unittest.TestCase):
         self.assertEqual([run["id"] for run in runs], [200788, 200789])
         self.assertEqual(runs[0]["entry_name"], "SuperPOS iOS")
         self.assertIn("get_plan/200787", request.call_args.args[0])
+
+    def _rate_limited(self, retry_after=None, code=429):
+        headers = {"Retry-After": retry_after} if retry_after is not None else {}
+        return urllib.error.HTTPError(
+            "https://x.testrail.com", code, "Too Many Requests",
+            email.message_from_string("\n".join(f"{k}: {v}" for k, v in headers.items())),
+            io.BytesIO(b'{"error":"API Rate Limit Exceeded - 300 per minute maximum allowed."}'),
+        )
+
+    def test_rate_limit_waits_what_the_server_asks(self):
+        # Antes el tope era 5 s, así que una espera pedida de 8 s se recortaba y los
+        # tres intentos fallaban igual.
+        with patch("qasync.http_client.urllib.request.build_opener") as opener, \
+             patch("qasync.http_client.time.sleep") as sleep:
+            opener.return_value.open.side_effect = [
+                self._rate_limited("8"),
+                Mock(__enter__=Mock(return_value=Mock(read=Mock(return_value=b'{"ok":1}'))), __exit__=Mock()),
+            ]
+            self.assertEqual(request_json("https://x.testrail.com"), {"ok": 1})
+        self.assertEqual(sleep.call_args_list[0].args[0], 8.0)
+
+    def test_rate_limit_without_a_header_backs_off_on_a_minute_scale(self):
+        with patch("qasync.http_client.urllib.request.build_opener") as opener, \
+             patch("qasync.http_client.time.sleep") as sleep:
+            opener.return_value.open.side_effect = [self._rate_limited()] * 3
+            with self.assertRaisesRegex(ExternalServiceError, "429"):
+                request_json("https://x.testrail.com")
+        # Una cuota por minuto no se libera en 400 ms.
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [2.0, 4.0])
+
+    def test_a_wait_longer_than_the_budget_fails_fast_with_the_server_message(self):
+        # app.py corta la conexión del navegador a los 20 s. Esperar menos de lo que
+        # pide el servidor sólo gasta ese tiempo para volver a fallar, así que se
+        # devuelve su mensaje, que ya dice cuánto hay que esperar.
+        with patch("qasync.http_client.urllib.request.build_opener") as opener, \
+             patch("qasync.http_client.time.sleep") as sleep:
+            opener.return_value.open.side_effect = [self._rate_limited("19")]
+            with self.assertRaisesRegex(ExternalServiceError, "Rate Limit Exceeded"):
+                request_json("https://x.testrail.com")
+        sleep.assert_not_called()
+
+    def test_writes_are_never_retried(self):
+        with patch("qasync.http_client.urllib.request.build_opener") as opener, \
+             patch("qasync.http_client.time.sleep") as sleep:
+            opener.return_value.open.side_effect = [self._rate_limited("1")]
+            with self.assertRaises(ExternalServiceError):
+                request_json("https://x.testrail.com", method="POST", body={"a": 1})
+        sleep.assert_not_called()
 
     def test_validates_custom_field_types(self):
         client = TestRailClient(config())
