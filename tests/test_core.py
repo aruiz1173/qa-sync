@@ -33,7 +33,7 @@ from qasync.state import private_dir, private_file, state_root
 from qasync.testrail import TestRailClient, normalize_case_id, normalize_run_id
 from qasync.vision import (
     VisionAnalyzer, _bounded_current_case, _bounded_style_samples, _distinct_images, _style_text,
-    _polish_result, _prompt,
+    _polish_result, _prompt, _review_prompt,
     _representative_images,
     _validated_data_url,
 )
@@ -279,6 +279,32 @@ class ImageTests(unittest.TestCase):
         # Las imágenes se quitan para no invitar a inventar capturas.
         self.assertEqual(_style_text('<p>a</p><img src="x.png">b', 500), "<p>a</p>b")
         self.assertEqual(_style_text(None, 10), "")
+
+    def test_target_device_instruction_protects_other_devices(self):
+        # Un mismo caso sirve a varios dispositivos y los separa con corchetes dentro
+        # del propio paso, un párrafo por dispositivo. Reconstruir desde un recorrido
+        # Android sin avisar de eso borraría el párrafo de iPad y rompería el caso.
+        prompt = _prompt("android", "", {"id": 7}, 6, [], "Android Phone")
+        self.assertIn("Android Phone", prompt)
+        self.assertIn("Conserva palabra por palabra", prompt)
+        self.assertIn("no los borres", prompt)
+        self.assertIn("[iOS - iPad]", prompt)
+        # Un paso sin marca aplica a todos: no debe duplicarse por dispositivo.
+        self.assertIn("aplica a todos los", prompt)
+        # El caso manda sobre el nombre de la configuración: ya usa [Android], no
+        # [Android Phone], y respetar su forma importa más que ser exacto.
+        self.assertIn("usa la que ya usa", prompt)
+
+    def test_no_target_device_adds_no_instruction(self):
+        for empty in ("", None, "   "):
+            with self.subTest(empty=empty):
+                self.assertNotIn("corchetes", _prompt("android", "", {"id": 7}, 6, [], empty))
+
+    def test_reviewer_is_told_about_the_target_too(self):
+        # Sin esto la segunda pasada limpia como "no respaldado" lo que no entiende.
+        review = _review_prompt("android", {"title": "x"}, 6, "", {"id": 7}, [], "iPad")
+        self.assertIn("iPad", review)
+        self.assertIn("Conserva palabra por palabra", review)
 
     def test_style_reference_demands_the_same_markup_format(self):
         samples = [{"title": "Verify mode", "steps": [

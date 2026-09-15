@@ -392,6 +392,7 @@ class QASyncService:
         current = client.get_case(case_id)
         analysis = VisionAnalyzer(self.config).analyze(
             style_samples=self._style_samples(client, current, request.get("project_id")),
+            target_config=str(request.get("target_config", ""))[:200],
             platform=platform,
             images=request.get("images") or [],
             context=str(request.get("context", ""))[:12000],

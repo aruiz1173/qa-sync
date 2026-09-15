@@ -195,15 +195,39 @@ def _style_instruction(samples: list[dict[str, Any]]) -> str:
     )
 
 
+def _target_instruction(target: object) -> str:
+    """Un mismo caso sirve a varios dispositivos y los separa con corchetes.
+
+    Sin esto, reconstruir desde un recorrido Android borraba los párrafos marcados
+    para iPad y el caso quedaba roto para los demás dispositivos.
+    """
+    name = str(target or "").strip()
+    if not name:
+        return ""
+    return (
+        f"Este recorrido se ejecutó en «{name}». El caso lo comparten varios dispositivos y los "
+        "distingue con una marca entre corchetes al inicio del texto, un párrafo por dispositivo "
+        "dentro del mismo paso, por ejemplo: "
+        "«<p>[Android] Ir al applet de cobro</p><p>[iOS - iPad] Ir al applet de cobro > Añadir importe</p>». "
+        f"Actualiza únicamente lo que corresponde a «{name}». Conserva palabra por palabra los "
+        "párrafos marcados para otros dispositivos: no los borres, no los reescribas y no los "
+        "reordenes, porque el mismo caso los sigue usando. Un paso sin marca aplica a todos los "
+        "dispositivos; si lo observado coincide con él, déjalo sin marca en vez de duplicarlo. "
+        f"Si el caso ya nombra a ese dispositivo de otra forma, usa la que ya usa en lugar de «{name}». "
+    )
+
+
 def _prompt(
     platform: str,
     context: str,
     current_case: dict[str, Any],
     frame_count: int = 0,
     style_samples: object = None,
+    target_config: object = None,
 ) -> str:
     bounded_case = _bounded_current_case(current_case)
     style = _style_instruction(_bounded_style_samples(style_samples))
+    target = _target_instruction(target_config)
     platform_rules = (
         "Usa nombres y patrones Android: barra de navegación, back, dialogs, toasts, permisos y teclado; "
         "no confundas cambios de estado con un tap si no existe evidencia."
@@ -232,7 +256,7 @@ def _prompt(
         "No transcribas PII, credenciales, nombres, correos, teléfonos, tarjetas ni identificadores; "
         "usa marcadores genéricos y registra toda incertidumbre en warnings. No incluyas razonamiento interno. "
         f"Redacta en el idioma del caso existente, o en español si está vacío, y sé específico para {platform}. "
-        f"{style}"
+        f"{style}{target}"
         f"Contexto y evidencia semántica del QA: {_bounded_context(context) or '(sin contexto)'}. "
         f"Caso actual de TestRail: {json.dumps(bounded_case, ensure_ascii=False)}"
     )
@@ -245,10 +269,12 @@ def _review_prompt(
     context: str,
     current_case: dict[str, Any],
     style_samples: object = None,
+    target_config: object = None,
 ) -> str:
     bounded_case = _bounded_current_case(current_case)
     # Sin esto la segunda pasada reescribe con su propia voz y tira el estilo del equipo.
     style = _style_instruction(_bounded_style_samples(style_samples))
+    target = _target_instruction(target_config)
     return (
         "Eres el revisor final de un caso móvil generado desde evidencia visual. Reinspecciona las "
         f"{frame_count} capturas en orden y devuelve el JSON completo corregido para {platform}. "
@@ -257,7 +283,7 @@ def _review_prompt(
         "Comprueba que título y precondiciones pertenezcan al flujo, que no haya PII y que warnings señale "
         "exactamente lo que no puede concluirse. No agregues detalle imaginado ni razonamiento interno. "
         "Conserva la voz del equipo: corrige el contenido sin reescribir el estilo. "
-        f"{style}"
+        f"{style}{target}"
         f"Contexto y evidencia semántica original: {_bounded_context(context) or '(sin contexto)'}. "
         f"Caso original de TestRail: {json.dumps(bounded_case, ensure_ascii=False)}. "
         f"Candidato a auditar: {json.dumps(candidate, ensure_ascii=False)}"
@@ -334,6 +360,7 @@ class VisionAnalyzer:
         context: str,
         current_case: dict[str, Any],
         style_samples: object = None,
+        target_config: object = None,
     ) -> dict[str, Any]:
         if platform not in {"android", "ios"}:
             raise ValidationError("La plataforma debe ser android o ios.")
@@ -346,7 +373,7 @@ class VisionAnalyzer:
             if self.config.vision_quality == "economical"
             else distinct_images
         )
-        prompt = _prompt(platform, context, current_case, len(prepared_images), style_samples)
+        prompt = _prompt(platform, context, current_case, len(prepared_images), style_samples, target_config)
         provider = self.config.vision_provider
         calls = 0
 
@@ -383,7 +410,7 @@ class VisionAnalyzer:
                 result = _polish_result(call(
                     provider,
                     prepared_images,
-                    _review_prompt(platform, result, len(prepared_images), context, current_case, style_samples),
+                    _review_prompt(platform, result, len(prepared_images), context, current_case, style_samples, target_config),
                 ))
             except (UsageLimitError, ExternalServiceError, ConfigurationError) as exc:
                 operational_warnings.append(f"La revisión visual adicional no terminó: {exc}")
