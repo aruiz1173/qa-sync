@@ -116,6 +116,10 @@ class HistoryStore:
                     "device_name": metadata.get("device_name", ""),
                     "device_version": metadata.get("device_version", ""),
                     "provider": metadata.get("provider", ""),
+                    "target_config": metadata.get("target_config", ""),
+                    # Lo que informó el proveedor al generar este caso, para poder
+                    # sumar el consumo real en vez de estimarlo.
+                    "usage": metadata.get("usage") if isinstance(metadata.get("usage"), dict) else {},
                 })
         return sorted(rows, key=lambda item: int(item.get("created_at") or 0), reverse=True)[:limit]
 

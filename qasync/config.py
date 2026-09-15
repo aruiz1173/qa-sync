@@ -8,6 +8,13 @@ def _env(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(_env(name, str(default)))
+    except ValueError:
+        return default
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(_env(name, str(default)))
@@ -43,6 +50,7 @@ class Config:
     max_request_bytes: int = 45 * 1024 * 1024
     max_images: int = 16
     max_recording_seconds: int = 900
+    capture_interval: float = 1.25
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -72,6 +80,7 @@ class Config:
             vision_quality=_env("QA_SYNC_VISION_QUALITY", "high").lower(),
             max_images=_env_int("QA_SYNC_MAX_IMAGES", 16),
             max_recording_seconds=_env_int("QA_SYNC_MAX_RECORDING_SECONDS", 900),
+            capture_interval=_env_float("QA_SYNC_CAPTURE_INTERVAL", 1.25),
         )
 
     @property
@@ -107,4 +116,5 @@ class Config:
             "allow_provider_fallback": self.allow_provider_fallback,
             "fallback_provider": self.fallback_provider,
             "vision_quality": self.vision_quality,
+            "capture_interval": self.capture_interval,
         }

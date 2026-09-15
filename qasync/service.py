@@ -5,6 +5,7 @@ import copy
 import json
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -126,6 +127,99 @@ class ProposalStore:
         temporary.replace(self.path)
 
 
+class DraftStore:
+    """Named work in progress that outlives a proposal.
+
+    A proposal expires in 30 minutes and is single use, which is right for something
+    about to be written to TestRail but loses the work of anyone interrupted. A draft
+    has no expiry, can be reopened as often as needed and never writes anywhere.
+    """
+
+    MAX_DRAFTS = 200
+
+    def __init__(self, path: Path | None = None):
+        self.path = path
+        self._items: dict[str, dict[str, Any]] = {}
+        self._lock = threading.Lock()
+        self._load()
+
+    def save(self, name: str, proposal: Proposal, draft_id: str = "") -> str:
+        clean = " ".join(str(name or "").split())[:80]
+        if not clean:
+            raise ValidationError("Give the draft a name so you can find it later.")
+        with self._lock:
+            if not draft_id or draft_id not in self._items:
+                if len(self._items) >= self.MAX_DRAFTS:
+                    raise ValidationError(
+                        f"There are already {self.MAX_DRAFTS} drafts. Delete one before saving another."
+                    )
+                draft_id = uuid.uuid4().hex
+                created_at = time.time()
+            else:
+                created_at = float(self._items[draft_id].get("created_at", time.time()))
+            self._items[draft_id] = {
+                "id": draft_id, "name": clean, "created_at": created_at, "updated_at": time.time(),
+                "case_id": proposal.case_id, "platform": proposal.platform,
+                "target_config": proposal.target_config,
+                "device_name": proposal.device_name, "device_version": proposal.device_version,
+                "confidence": proposal.confidence, "warnings": proposal.warnings or [],
+                "provider_used": proposal.provider_used, "vision_quality": proposal.vision_quality,
+                "current": proposal.current, "changes": proposal.changes,
+                "usage": proposal.usage or {},
+                "environment": proposal.environment or {},
+            }
+            self._save()
+        return draft_id
+
+    def list(self) -> list[dict[str, Any]]:
+        with self._lock:
+            items = sorted(self._items.values(), key=lambda item: item.get("updated_at", 0), reverse=True)
+        # El cuerpo del caso no viaja al listado: sólo lo suficiente para reconocerlo.
+        return [{
+            "id": item["id"], "name": item["name"], "case_id": item["case_id"],
+            "platform": item["platform"], "target_config": item.get("target_config", ""),
+            "device_name": item.get("device_name", ""), "updated_at": item.get("updated_at", 0),
+            "usage": item.get("usage", {}),
+            "steps": len(item.get("changes", {}).get(
+                next((key for key in item.get("changes", {}) if key.startswith("custom_steps")), ""), []
+            ) or []),
+        } for item in items]
+
+    def get(self, draft_id: str) -> dict[str, Any]:
+        with self._lock:
+            item = self._items.get(str(draft_id))
+        if item is None:
+            raise ValidationError("That draft no longer exists.")
+        return copy.deepcopy(item)
+
+    def delete(self, draft_id: str) -> None:
+        with self._lock:
+            if self._items.pop(str(draft_id), None) is None:
+                raise ValidationError("That draft no longer exists.")
+            self._save()
+
+    def _load(self) -> None:
+        if not self.path:
+            return
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            self._items = {
+                str(key): value for key, value in raw.items()
+                if isinstance(value, dict) and value.get("id") == key
+            }
+        except (OSError, ValueError, AttributeError):
+            self._items = {}
+
+    def _save(self) -> None:
+        if not self.path:
+            return
+        private_dir(self.path.parent)
+        temporary = self.path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(self._items, ensure_ascii=False), encoding="utf-8")
+        private_file(temporary)
+        temporary.replace(self.path)
+
+
 class QASyncService:
     def __init__(
         self,
@@ -137,7 +231,9 @@ class QASyncService:
         self.config = config
         state_dir = state_root()
         self.store = store or ProposalStore(path=state_dir / "proposals.json")
+        self.drafts = DraftStore(path=state_dir / "drafts.json")
         self.recorder = recorder or RecorderManager(
+            interval=config.capture_interval,
             max_frames=config.max_images,
             max_duration=config.max_recording_seconds,
             appium_url=config.appium_url,
@@ -498,6 +594,41 @@ class QASyncService:
         changes[self.config.testrail_steps_field] = cleaned_steps
         return self._proposal_response(token, self.store.update(token, changes))
 
+    def save_draft(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Park a proposal under a name. Nothing is written to TestRail."""
+        token = str(request.get("proposal_token", ""))
+        proposal = self.store.get(token)
+        draft_id = self.drafts.save(str(request.get("name") or ""), proposal, str(request.get("draft_id") or ""))
+        return {"saved": True, "draft_id": draft_id, "drafts": self.drafts.list()}
+
+    def draft_list(self) -> dict[str, Any]:
+        return {"drafts": self.drafts.list()}
+
+    def open_draft(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Turn a draft back into a live proposal.
+
+        The stored `current` is kept on purpose: applying re-reads the case and refuses
+        if somebody changed it since, which is exactly what should happen to a draft
+        that sat for days.
+        """
+        item = self.drafts.get(str(request.get("draft_id", "")))
+        proposal = Proposal(
+            int(item["case_id"]), str(item["platform"]), item.get("current") or {},
+            item.get("changes") or {}, time.time(),
+            float(item.get("confidence") or 0.0), list(item.get("warnings") or []),
+            str(item.get("provider_used", "")), "",
+            str(item.get("device_name", "")), str(item.get("device_version", "")),
+            vision_quality=str(item.get("vision_quality", "high")),
+            target_config=str(item.get("target_config", "")),
+            usage={}, environment=item.get("environment") or {},
+        )
+        token = self.store.put(proposal)
+        return {**self._proposal_response(token, proposal), "draft_id": item["id"], "draft_name": item["name"]}
+
+    def delete_draft(self, request: dict[str, Any]) -> dict[str, Any]:
+        self.drafts.delete(str(request.get("draft_id", "")))
+        return {"deleted": True, "drafts": self.drafts.list()}
+
     def apply(self, request: dict[str, Any]) -> dict[str, Any]:
         if self.config.write_mode == "review_only":
             raise ValidationError("QA Sync está en modo simulación; no se escribió nada en TestRail.")
@@ -536,10 +667,17 @@ class QASyncService:
             "platform": proposal.platform, "device_id": proposal.device_id,
             "device_name": proposal.device_name, "device_version": proposal.device_version,
             "provider": proposal.provider_used, "target_config": proposal.target_config,
+            "usage": proposal.usage or {},
         })
         updated = client.update_case(proposal.case_id, changes)
         applied_fields = {key: updated.get(key, changes.get(key)) for key in changes}
         self.history.mark_applied(backup_id, applied_fields)
+        draft_id = str(request.get("draft_id", ""))
+        if draft_id:
+            try:
+                self.drafts.delete(draft_id)
+            except ValidationError:
+                pass
         return {
             "updated": True,
             "case_id": proposal.case_id,
@@ -553,7 +691,42 @@ class QASyncService:
 
     def audit_report(self) -> dict[str, Any]:
         rows = self.history.audit()
-        return {"version": 1, "generated_at": int(time.time()), "records": rows, "count": len(rows)}
+        return {
+            "version": 1, "generated_at": int(time.time()), "records": rows, "count": len(rows),
+            "spend": self._spend_summary(rows),
+        }
+
+    def _spend_summary(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        """Lo consumido por los casos ya aplicados, más lo que espera en borradores.
+
+        Se suma de lo que informó el proveedor en cada análisis, no de una estimación.
+        """
+        def total(items: list[dict[str, Any]]) -> dict[str, float]:
+            summed: dict[str, float] = {}
+            for item in items:
+                usage = item.get("usage")
+                if not isinstance(usage, dict):
+                    continue
+                for key, value in usage.items():
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        summed[key] = summed.get(key, 0) + float(value)
+            return {
+                key: round(value, 6) if key.endswith("_usd") else int(value)
+                for key, value in sorted(summed.items())
+            }
+
+        drafts = self.drafts.list()
+        applied = total(rows)
+        pending = total(drafts)
+        return {
+            "applied": {**applied, "cases": len(rows)},
+            "drafts": {**pending, "cases": len(drafts)},
+            "cost_usd": round(float(applied.get("cost_usd", 0)) + float(pending.get("cost_usd", 0)), 6),
+            "note": (
+                "Summed from what each provider reported. Codex does not report tokens or cost, "
+                "so analyses run through it count as zero rather than an estimate."
+            ),
+        }
 
     def device_matrix(self) -> dict[str, Any]:
         rows: dict[tuple[str, str], dict[str, Any]] = {}

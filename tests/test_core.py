@@ -28,7 +28,7 @@ from qasync.history import HistoryStore
 from qasync.http_client import request_json
 from qasync.recorder import RecorderManager, RecordingSession, _redacted_label, parse_adb_devices, parse_ios_devices, parse_xctrace_physical_devices
 from qasync.devices import adb_endpoint_result, parse_adb_mdns_services, parse_adb_tcpip_result, parse_android_ip, parse_scrcpy_major
-from qasync.service import Proposal, ProposalStore, QASyncService
+from qasync.service import DraftStore, Proposal, ProposalStore, QASyncService
 from qasync.settings import SettingsManager, _validated_service_url
 from qasync.state import private_dir, private_file, state_root
 from qasync.testrail import TestRailClient, normalize_case_id, normalize_run_id
@@ -1704,6 +1704,68 @@ class ServiceTests(unittest.TestCase):
             revise([{"content": "a", "expected": "x" * 5001}])
         # Y el camino válido sigue pasando.
         self.assertEqual(len(revise([{"content": "a", "expected": "b"}])["changes"]["custom_steps_separated"]), 1)
+
+    def test_draft_survives_the_proposal_it_came_from(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ProposalStore(path=Path(directory) / "proposals.json")
+            service = QASyncService(config(), store)
+            service.drafts = DraftStore(Path(directory) / "drafts.json")
+            token = store.put(Proposal(
+                12, "android", {"title": "Old"}, {"title": "New"}, time.time(),
+                target_config="Android Phone", usage={"cost_usd": 0.12, "input_tokens": 900},
+            ))
+            saved = service.save_draft({"proposal_token": token, "name": "  Mode switch  "})
+            self.assertTrue(saved["saved"])
+            listed = saved["drafts"][0]
+            self.assertEqual(listed["name"], "Mode switch")
+            self.assertEqual(listed["case_id"], 12)
+            self.assertEqual(listed["usage"], {"cost_usd": 0.12, "input_tokens": 900})
+
+            # La propuesta caduca y es de un solo uso; el borrador no.
+            store.pop(token)
+            reopened = QASyncService(config(), store)
+            reopened.drafts = DraftStore(Path(directory) / "drafts.json")
+            live = reopened.open_draft({"draft_id": saved["draft_id"]})
+            self.assertEqual(live["changes"]["title"], "New")
+            self.assertEqual(live["draft_name"], "Mode switch")
+            # Vuelve a haber una propuesta viva con la que aplicar.
+            self.assertEqual(store.get(live["proposal_token"]).case_id, 12)
+
+            reopened.delete_draft({"draft_id": saved["draft_id"]})
+            self.assertEqual(reopened.draft_list()["drafts"], [])
+            with self.assertRaisesRegex(ValidationError, "no longer exists"):
+                reopened.open_draft({"draft_id": saved["draft_id"]})
+
+    def test_draft_needs_a_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ProposalStore()
+            service = QASyncService(config(), store)
+            service.drafts = DraftStore(Path(directory) / "drafts.json")
+            token = store.put(Proposal(12, "android", {}, {"title": "New"}, time.time()))
+            for blank in ("", "   ", None):
+                with self.subTest(name=blank), self.assertRaisesRegex(ValidationError, "name"):
+                    service.save_draft({"proposal_token": token, "name": blank})
+
+    def test_spend_is_summed_from_what_providers_reported(self):
+        analyzer = VisionAnalyzer.__new__(VisionAnalyzer)
+        analyzer._spend = {}
+        # El envelope del CLI de Claude trae tokens y coste y se estaban descartando.
+        analyzer._record_spend({
+            "usage": {"input_tokens": 2, "output_tokens": 51, "cache_creation_input_tokens": 28043},
+            "total_cost_usd": 0.283015, "duration_ms": 5922,
+        })
+        # La API de OpenAI los nombra distinto y debe sumarse igual.
+        analyzer._record_spend({"usage": {"prompt_tokens": 1000, "completion_tokens": 200}})
+        self.assertEqual(analyzer._spend["input_tokens"], 1002)
+        self.assertEqual(analyzer._spend["output_tokens"], 251)
+        self.assertEqual(analyzer._spend["cache_write_tokens"], 28043)
+        self.assertAlmostEqual(analyzer._spend["cost_usd"], 0.283015)
+        # Un proveedor que no informa nada no inventa cifras.
+        quiet = VisionAnalyzer.__new__(VisionAnalyzer)
+        quiet._spend = {}
+        quiet._record_spend({"result": "ok"})
+        quiet._record_spend({"usage": {"input_tokens": True}})
+        self.assertEqual(quiet._spend, {})
 
     @patch("qasync.service.TestRailClient")
     def test_review_only_blocks_backend_write_without_consuming_proposal(self, client_type):

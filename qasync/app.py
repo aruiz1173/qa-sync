@@ -213,6 +213,14 @@ class AppHandler(BaseHTTPRequestHandler):
                 result = self.service.analyze_recording(payload)
             elif path == "/api/proposal/revise":
                 result = self.service.revise_proposal(payload)
+            elif path == "/api/draft/save":
+                result = self.service.save_draft(payload)
+            elif path == "/api/draft/list":
+                result = self.service.draft_list()
+            elif path == "/api/draft/open":
+                result = self.service.open_draft(payload)
+            elif path == "/api/draft/delete":
+                result = self.service.delete_draft(payload)
             elif path == "/api/apply":
                 result = self.service.apply(payload)
             elif path == "/api/history":

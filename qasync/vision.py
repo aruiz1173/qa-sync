@@ -350,6 +350,9 @@ def _polish_result(result: Any) -> dict[str, Any]:
 class VisionAnalyzer:
     MAX_CLI_OUTPUT_BYTES = 2 * 1024 * 1024
     def __init__(self, config: Config):
+        # Cada llamada al proveedor suma aquí lo que reporte. La instancia vive
+        # una sola petición, así que no hay estado compartido entre análisis.
+        self._spend: dict[str, float] = {}
         if not config.vision_provider:
             raise ConfigurationError("Elige un proveedor de visión: Codex, Claude u OpenAI API.")
         if config.vision_provider == "openai_api" and not config.openai_api_key:
@@ -447,6 +450,8 @@ class VisionAnalyzer:
             "frames_distinct": len(distinct_images),
             "frames_analyzed": len(prepared_images),
             "model_calls": calls,
+            **{key: round(value, 6) if key.endswith("_usd") else int(value)
+               for key, value in self._spend.items()},
         }
         result["_provider_used"] = provider
         return result
@@ -493,6 +498,8 @@ class VisionAnalyzer:
             body=payload,
             timeout=90,
         )
+        if isinstance(response, dict):
+            self._record_spend(response)
         output_text = response.get("output_text")
         if not output_text:
             for item in response.get("output", []):
@@ -578,6 +585,8 @@ class VisionAnalyzer:
             self._raise_cli_error("Claude", stderr)
         try:
             envelope = json.loads(stdout)
+            if isinstance(envelope, dict):
+                self._record_spend(envelope)
             structured = envelope.get("structured_output") if isinstance(envelope, dict) else None
             if isinstance(structured, dict):
                 return structured
@@ -596,6 +605,29 @@ class VisionAnalyzer:
             stdout = completed.stdout if isinstance(completed.stdout, str) else stdout_file.read()
             stderr = completed.stderr if isinstance(completed.stderr, str) else stderr_file.read()
             return completed, stdout, stderr
+
+    def _record_spend(self, envelope: dict[str, Any]) -> None:
+        """Tokens, coste y duración que el proveedor ya informa.
+
+        El CLI de Claude los trae en su envelope y se estaban descartando, así que
+        no había forma de saber cuánto costaba generar un caso.
+        """
+        usage = envelope.get("usage") if isinstance(envelope.get("usage"), dict) else {}
+        for source, target in (
+            ("input_tokens", "input_tokens"),
+            ("output_tokens", "output_tokens"),
+            ("cache_creation_input_tokens", "cache_write_tokens"),
+            ("cache_read_input_tokens", "cache_read_tokens"),
+            ("prompt_tokens", "input_tokens"),
+            ("completion_tokens", "output_tokens"),
+        ):
+            value = usage.get(source)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                self._spend[target] = self._spend.get(target, 0) + float(value)
+        for source, target in (("total_cost_usd", "cost_usd"), ("duration_ms", "duration_ms")):
+            value = envelope.get(source)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                self._spend[target] = self._spend.get(target, 0) + float(value)
 
     @staticmethod
     def _raise_cli_error(name: str, detail: str) -> None:

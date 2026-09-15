@@ -27,6 +27,7 @@ PUBLIC_FIELDS = {
     "testrail_ios_value",
     "max_images",
     "max_recording_seconds",
+    "capture_interval",
     "appium_url",
     "ios_bundle_id",
     "appium_capabilities_json",
@@ -110,6 +111,7 @@ class SettingsManager:
         values["max_recording_seconds"] = self._max_recording_seconds(
             values.get("max_recording_seconds", 900)
         )
+        values["capture_interval"] = self._capture_interval(values.get("capture_interval", 1.25))
         self._validate(values)
         return Config(**values)
 
@@ -136,6 +138,8 @@ class SettingsManager:
                 value = self._max_images(value)
             elif key == "max_recording_seconds":
                 value = self._max_recording_seconds(value)
+            elif key == "capture_interval":
+                value = self._capture_interval(value)
             elif key == "allow_provider_fallback":
                 value = value is True or str(value).strip().lower() in {"1", "true", "yes", "on"}
             else:
@@ -213,6 +217,18 @@ class SettingsManager:
         if not 2 <= parsed <= 30:
             raise ValidationError("El límite de pantallas debe estar entre 2 y 30.")
         return parsed
+
+    @staticmethod
+    def _capture_interval(value: Any) -> float:
+        """Cadencia de captura. Más corta reacciona mejor a pantallas rápidas; el
+        suelo evita pedir capturas más seguido de lo que tarda un screencap."""
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError("El intervalo de captura debe ser un número.") from exc
+        if not 0.5 <= parsed <= 10:
+            raise ValidationError("El intervalo de captura debe estar entre 0.5 y 10 segundos.")
+        return round(parsed, 2)
 
     @staticmethod
     def _max_recording_seconds(value: Any) -> int:
