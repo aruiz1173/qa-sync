@@ -195,7 +195,18 @@ def _style_instruction(samples: list[dict[str, Any]]) -> str:
     )
 
 
-def _target_instruction(target: object) -> str:
+def _case_marks_devices(case: dict[str, Any]) -> bool:
+    """Si el caso ya separa dispositivos con corchetes al inicio del texto."""
+    marker = re.compile(r"(?:^|<p>|<li>)\s*\[[^\]\n]{1,60}\]", re.IGNORECASE)
+    for step in case.get("steps") or []:
+        if isinstance(step, dict) and any(
+            marker.search(str(step.get(key, ""))) for key in ("content", "expected")
+        ):
+            return True
+    return bool(marker.search(str(case.get("preconditions", ""))))
+
+
+def _target_instruction(target: object, case_marks_devices: bool = True) -> str:
     """Un mismo caso sirve a varios dispositivos y los separa con corchetes.
 
     Sin esto, reconstruir desde un recorrido Android borraba los párrafos marcados
@@ -204,6 +215,14 @@ def _target_instruction(target: object) -> str:
     name = str(target or "").strip()
     if not name:
         return ""
+    if not case_marks_devices:
+        # Un caso que hoy no distingue dispositivos no debe estrenar corchetes por
+        # el simple hecho de haberse grabado en uno: sería ruido en un caso limpio.
+        return (
+            f"Este recorrido se ejecutó en «{name}». El caso actual no distingue dispositivos con "
+            "marcas entre corchetes, así que no introduzcas ninguna: redacta los pasos de forma "
+            "que sigan sirviendo para el caso tal como está. "
+        )
     return (
         f"Este recorrido se ejecutó en «{name}». El caso lo comparten varios dispositivos y los "
         "distingue con una marca entre corchetes al inicio del texto, un párrafo por dispositivo "
@@ -227,7 +246,7 @@ def _prompt(
 ) -> str:
     bounded_case = _bounded_current_case(current_case)
     style = _style_instruction(_bounded_style_samples(style_samples))
-    target = _target_instruction(target_config)
+    target = _target_instruction(target_config, _case_marks_devices(bounded_case))
     platform_rules = (
         "Usa nombres y patrones Android: barra de navegación, back, dialogs, toasts, permisos y teclado; "
         "no confundas cambios de estado con un tap si no existe evidencia."
@@ -274,7 +293,7 @@ def _review_prompt(
     bounded_case = _bounded_current_case(current_case)
     # Sin esto la segunda pasada reescribe con su propia voz y tira el estilo del equipo.
     style = _style_instruction(_bounded_style_samples(style_samples))
-    target = _target_instruction(target_config)
+    target = _target_instruction(target_config, _case_marks_devices(bounded_case))
     return (
         "Eres el revisor final de un caso móvil generado desde evidencia visual. Reinspecciona las "
         f"{frame_count} capturas en orden y devuelve el JSON completo corregido para {platform}. "

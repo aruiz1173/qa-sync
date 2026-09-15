@@ -32,7 +32,8 @@ from qasync.settings import SettingsManager, _validated_service_url
 from qasync.state import private_dir, private_file, state_root
 from qasync.testrail import TestRailClient, normalize_case_id, normalize_run_id
 from qasync.vision import (
-    VisionAnalyzer, _bounded_current_case, _bounded_style_samples, _distinct_images, _style_text,
+    VisionAnalyzer, _bounded_current_case, _bounded_style_samples, _case_marks_devices,
+    _distinct_images, _style_text,
     _polish_result, _prompt, _review_prompt,
     _representative_images,
     _validated_data_url,
@@ -284,7 +285,11 @@ class ImageTests(unittest.TestCase):
         # Un mismo caso sirve a varios dispositivos y los separa con corchetes dentro
         # del propio paso, un párrafo por dispositivo. Reconstruir desde un recorrido
         # Android sin avisar de eso borraría el párrafo de iPad y rompería el caso.
-        prompt = _prompt("android", "", {"id": 7}, 6, [], "Android Phone")
+        shared = {"id": 7, "steps": [
+            {"content": "<p>[Android] Ir al applet</p><p>[iOS - iPad] Ir al applet > Cobrar</p>",
+             "expected": "<ul><li>Aparece el cajón</li></ul>"},
+        ]}
+        prompt = _prompt("android", "", shared, 6, [], "Android Phone")
         self.assertIn("Android Phone", prompt)
         self.assertIn("Conserva palabra por palabra", prompt)
         self.assertIn("no los borres", prompt)
@@ -295,6 +300,24 @@ class ImageTests(unittest.TestCase):
         # [Android Phone], y respetar su forma importa más que ser exacto.
         self.assertIn("usa la que ya usa", prompt)
 
+    def test_a_case_without_markers_does_not_get_new_ones(self):
+        # Mientras se trabaja con un solo dispositivo, un caso limpio no debe estrenar
+        # corchetes por el simple hecho de haberse grabado en uno.
+        clean = {"id": 7, "steps": [{"content": "<p>Ir al applet de cobro</p>", "expected": "ok"}]}
+        self.assertFalse(_case_marks_devices(clean))
+        prompt = _prompt("android", "", clean, 6, [], "Android Phone")
+        self.assertIn("no introduzcas ninguna", prompt)
+        self.assertNotIn("Conserva palabra por palabra", prompt)
+
+        marked = {"id": 7, "steps": [
+            {"content": "<p>[Android] Ir al applet</p><p>[iOS - iPad] Otra ruta</p>", "expected": "ok"},
+        ]}
+        self.assertTrue(_case_marks_devices(marked))
+        self.assertIn("Conserva palabra por palabra", _prompt("android", "", marked, 6, [], "Android Phone"))
+        # También cuenta una marca en precondiciones o dentro de una lista.
+        self.assertTrue(_case_marks_devices({"preconditions": "<li>[iOS only] cuenta con modo</li>"}))
+        self.assertFalse(_case_marks_devices({"steps": [{"content": "sin marca [al final]", "expected": ""}]}))
+
     def test_no_target_device_adds_no_instruction(self):
         for empty in ("", None, "   "):
             with self.subTest(empty=empty):
@@ -302,7 +325,8 @@ class ImageTests(unittest.TestCase):
 
     def test_reviewer_is_told_about_the_target_too(self):
         # Sin esto la segunda pasada limpia como "no respaldado" lo que no entiende.
-        review = _review_prompt("android", {"title": "x"}, 6, "", {"id": 7}, [], "iPad")
+        shared = {"id": 7, "steps": [{"content": "<p>[Android] Ir</p><p>[iOS - iPad] Otra</p>", "expected": "ok"}]}
+        review = _review_prompt("android", {"title": "x"}, 6, "", shared, [], "iPad")
         self.assertIn("iPad", review)
         self.assertIn("Conserva palabra por palabra", review)
 
