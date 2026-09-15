@@ -1617,6 +1617,40 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(result["changes"]["title"], "Edited")
         self.assertEqual(store.get(token).changes["custom_steps_separated"][0]["expected"], "Receipt")
 
+    def test_every_step_needs_an_expected_result(self):
+        store = ProposalStore()
+        token = store.put(Proposal(12, "android", {}, {
+            "title": "Old", "custom_preconds": "Old",
+            "custom_steps_separated": [{"content": "Old", "expected": "Old"}],
+        }, 9999999999))
+        service = QASyncService(config(), store)
+
+        def revise(steps):
+            return service.revise_proposal({
+                "proposal_token": token, "title": "Edited", "preconditions": "Signed in", "steps": steps,
+            })
+
+        # El esquema del modelo ya lo exigía; editar a mano se lo saltaba porque sólo
+        # se comprobaba el tipo y el largo máximo del resultado esperado.
+        for empty in ("", "   ", None, 7):
+            with self.subTest(expected=empty), self.assertRaisesRegex(ValidationError, "paso 2"):
+                revise([
+                    {"content": "Tocar Pagar", "expected": "Aparece el recibo"},
+                    {"content": "Tocar Listo", "expected": empty},
+                ])
+        # El número del paso aparece en el mensaje: con 20 pasos, "cada acción" no
+        # decía cuál faltaba.
+        with self.assertRaisesRegex(ValidationError, "acción del paso 3"):
+            revise([
+                {"content": "a", "expected": "b"},
+                {"content": "c", "expected": "d"},
+                {"content": "  ", "expected": "e"},
+            ])
+        with self.assertRaisesRegex(ValidationError, "paso 1 supera"):
+            revise([{"content": "a", "expected": "x" * 5001}])
+        # Y el camino válido sigue pasando.
+        self.assertEqual(len(revise([{"content": "a", "expected": "b"}])["changes"]["custom_steps_separated"]), 1)
+
     @patch("qasync.service.TestRailClient")
     def test_review_only_blocks_backend_write_without_consuming_proposal(self, client_type):
         store = ProposalStore()

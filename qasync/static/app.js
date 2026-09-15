@@ -264,7 +264,28 @@ function renderProposal(){
 function renumberSteps(){const steps=[...document.querySelectorAll('[data-edit-step]')];steps.forEach((step,index)=>{step.querySelector('.step-toolbar strong').textContent=`Paso ${index+1}`;step.querySelector('[data-direction="up"]').disabled=index===0;step.querySelector('[data-direction="down"]').disabled=index===steps.length-1})}
 function bindStepEditor(){document.querySelectorAll('.step-move').forEach(button=>{button.onclick=()=>{const step=button.closest('[data-edit-step]');const sibling=button.dataset.direction==='up'?step.previousElementSibling:step.nextElementSibling;if(!sibling)return;if(button.dataset.direction==='up')step.parentElement.insertBefore(step,sibling);else step.parentElement.insertBefore(sibling,step);renumberSteps()}});document.querySelectorAll('.step-delete').forEach(button=>{button.onclick=()=>{if(document.querySelectorAll('[data-edit-step]').length===1)return showToast('La propuesta debe conservar al menos un paso.',true);button.closest('[data-edit-step]').remove();renumberSteps()}});renumberSteps()}
 function proposalEdits(){return{proposal_token:state.proposal.proposal_token,title:$('#edit-title').value,preconditions:$('#edit-preconditions').value,steps:[...document.querySelectorAll('[data-edit-step]')].map(step=>({content:step.querySelector('.edit-action').value,expected:step.querySelector('.edit-expected').value}))}}
-async function applyProposal(){const button=$('#apply-update');button.disabled=true;const optionalSteps=[...document.querySelectorAll('[data-edit-step]')].flatMap((step,index)=>step.querySelector('.optional-check').checked?[index]:[]);try{state.proposal=await api('/api/proposal/revise',proposalEdits());const result=await api('/api/apply',{proposal_token:state.proposal.proposal_token,confirmation:$('#confirmation').value,optional_steps:optionalSteps});showToast(`C${result.case_id} actualizado correctamente.`);if(state.activeTest)await selectTest(state.activeTest.id);else{state.currentCase=(await api('/api/case',{case_id:result.case_id})).case;renderCase()}}catch(error){showToast(error.message,true);button.disabled=false}}
+// Un paso sin resultado esperado no es verificable. El servidor lo rechaza, pero
+// avisar aquí señala cuál campo falta en vez de dar un mensaje suelto.
+function firstIncompleteStep(){
+  const steps=[...document.querySelectorAll('[data-edit-step]')];
+  steps.forEach(step=>step.querySelectorAll('.edit-action,.edit-expected').forEach(field=>field.classList.remove('invalid')));
+  for(const [index,step] of steps.entries()){
+    for(const [selector,label] of [['.edit-action','una acción'],['.edit-expected','un resultado esperado']]){
+      const field=step.querySelector(selector);
+      if(field&&!field.value.trim())return{number:index+1,field,label};
+    }
+  }
+  return null;
+}
+
+async function applyProposal(){
+  const missing=firstIncompleteStep();
+  if(missing){
+    missing.field.classList.add('invalid');missing.field.focus();
+    missing.field.scrollIntoView({block:'center',behavior:'smooth'});
+    return showToast(`El paso ${missing.number} necesita ${missing.label}.`,true);
+  }
+  const button=$('#apply-update');button.disabled=true;const optionalSteps=[...document.querySelectorAll('[data-edit-step]')].flatMap((step,index)=>step.querySelector('.optional-check').checked?[index]:[]);try{state.proposal=await api('/api/proposal/revise',proposalEdits());const result=await api('/api/apply',{proposal_token:state.proposal.proposal_token,confirmation:$('#confirmation').value,optional_steps:optionalSteps});showToast(`C${result.case_id} actualizado correctamente.`);if(state.activeTest)await selectTest(state.activeTest.id);else{state.currentCase=(await api('/api/case',{case_id:result.case_id})).case;renderCase()}}catch(error){showToast(error.message,true);button.disabled=false}}
 
 const settingIds={
   testrail_url:'setting-testrail-url',testrail_email:'setting-testrail-email',testrail_project_id:'setting-project-id',

@@ -478,14 +478,19 @@ class QASyncService:
         if not isinstance(steps, list) or not 1 <= len(steps) <= 100:
             raise ValidationError("La propuesta debe tener entre 1 y 100 pasos.")
         cleaned_steps = []
-        for step in steps:
+        for index, step in enumerate(steps, 1):
             if not isinstance(step, dict):
-                raise ValidationError("Cada paso debe ser un objeto.")
+                raise ValidationError(f"El paso {index} debe ser un objeto.")
             content, expected = step.get("content"), step.get("expected")
             if not isinstance(content, str) or not content.strip() or len(content) > 5000:
-                raise ValidationError("Cada acción debe contener entre 1 y 5000 caracteres.")
-            if not isinstance(expected, str) or len(expected) > 5000:
-                raise ValidationError("Un resultado esperado supera el límite permitido.")
+                raise ValidationError(f"La acción del paso {index} debe tener entre 1 y 5000 caracteres.")
+            # Un paso sin resultado esperado no se puede verificar. El esquema del
+            # modelo ya lo exige; editar a mano tampoco debería poder saltárselo,
+            # y antes sólo se comprobaba el tipo y el largo máximo.
+            if not isinstance(expected, str) or not expected.strip():
+                raise ValidationError(f"El paso {index} necesita un resultado esperado.")
+            if len(expected) > 5000:
+                raise ValidationError(f"El resultado esperado del paso {index} supera los 5000 caracteres.")
             cleaned_steps.append({"content": content.strip(), "expected": expected.strip()})
         changes = copy.deepcopy(proposal.changes)
         changes["title"] = title.strip()
