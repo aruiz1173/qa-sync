@@ -132,6 +132,27 @@ class CaseIdTests(unittest.TestCase):
                 f"entre ambos hay scroll horizontal",
             )
 
+    def test_topbar_cells_can_shrink_instead_of_invading_their_neighbours(self):
+        """Ninguna celda del topbar debe dimensionarse a su contenido.
+
+        `justify-self:center` no estira la celda: la dimensiona a su contenido, así que
+        un nombre de proyecto largo la hacía más ancha que su columna y se centraba
+        encima de las vecinas, dejando el select por debajo de los botones.
+        """
+        css = (Path(__file__).resolve().parents[1] / "qasync" / "static" / "styles.css").read_text(encoding="utf-8")
+        picker = re.search(r"\.project-picker\{([^}]*)\}", css)
+        self.assertIsNotNone(picker)
+        rules = picker.group(1)
+        self.assertNotIn("justify-self:center", rules, "una celda centrada no se estira a su columna")
+        self.assertIn("min-width:0", rules, "sin esto la celda no puede encogerse")
+        # Las pistas del topbar tienen que poder ceder: está fuera del overflow:hidden
+        # del dashboard, así que su contenido sí puede forzar el ancho de la página.
+        for track in re.findall(r"\.topbar\{[^}]*grid-template-columns:([^;}]+)", css):
+            self.assertNotRegex(
+                track.strip(), r"(^|\s)\d+px",
+                f"pista fija en el topbar: {track.strip()}",
+            )
+
     def test_distribution_is_standalone_and_has_its_own_ui(self):
         root = Path(__file__).resolve().parents[1]
         forbidden = ("@block/", "appkit", "kgoose", "g2-fetch", "com.block", "shared-dashboard")
