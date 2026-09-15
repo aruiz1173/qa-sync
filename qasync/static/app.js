@@ -26,15 +26,21 @@ async function loadRuns(){
 // Un run puede venir del listado del proyecto, de dentro de un plan, o pegado por URL.
 const knownRuns=()=>[...state.runs,...Object.values(state.planRuns).flat(),...(state.pastedRun?[state.pastedRun]:[])];
 
+// La configuración de TestRail dice a qué dispositivo apunta el run ("Android
+// Phone", "Android Tablet"): sin mostrarla, dos runs del mismo plan se ven idénticos.
+const runConfig=run=>String(run.config||'').trim();
+
 function runItemHtml(run){
   const total=totalForRun(run);
-  const suite=run.entry_name?`<span class="run-suite">${escapeHtml(run.entry_name)}</span>`:'';
-  return `<button class="run-item${state.activeRun?.id===run.id?' active':''}" data-run="${run.id}" type="button"><strong>${escapeHtml(run.name)}</strong>${suite}<div class="mini-progress"><span style="width:${passedPercent(run)}%"></span></div><div class="run-meta"><span>R${run.id}</span><span>${run.passed_count||0} de ${total} passed</span></div></button>`;
+  const config=runConfig(run);
+  const badge=config?`<span class="run-config">${escapeHtml(config)}</span>`:'';
+  const suite=run.entry_name&&run.entry_name!==run.name?`<span class="run-suite">${escapeHtml(run.entry_name)}</span>`:'';
+  return `<button class="run-item${state.activeRun?.id===run.id?' active':''}" data-run="${run.id}" type="button"><strong>${escapeHtml(run.name)}</strong>${badge}${suite}<div class="mini-progress"><span style="width:${passedPercent(run)}%"></span></div><div class="run-meta"><span>R${run.id}</span><span>${run.passed_count||0} de ${total} passed</span></div></button>`;
 }
 
 // El mismo campo filtra y abre: un proyecto puede traer 148 planes, y una lista
 // plana de ese tamaño no se navega. Si lo escrito parece una URL o un id, Enter lo abre.
-const matchesQuery=(item,prefix,query)=>!query||`${item.name||''} ${prefix}${item.id}`.toLowerCase().includes(query);
+const matchesQuery=(item,prefix,query)=>!query||`${item.name||''} ${item.config||''} ${prefix}${item.id}`.toLowerCase().includes(query);
 
 function renderRuns(){
   const query=$('#run-locator').value.trim().toLowerCase();
@@ -77,7 +83,7 @@ async function openLocatorRun(){
 async function selectRun(id){
   state.activeRun=knownRuns().find(run=>run.id===id);if(!state.activeRun)return;
   state.activeTest=null;state.currentCase=null;renderRuns();
-  $('#run-empty').hidden=true;$('#run-content').hidden=false;$('#run-label').textContent=state.activeRun.plan_id?`RUN R${id} · PLAN P${state.activeRun.plan_id}`:`RUN R${id}`;$('#run-name').textContent=state.activeRun.name;
+  $('#run-empty').hidden=true;$('#run-content').hidden=false;$('#run-label').textContent=[`RUN R${id}`,state.activeRun.plan_id?`PLAN P${state.activeRun.plan_id}`:'',runConfig(state.activeRun)].filter(Boolean).join(' · ');$('#run-name').textContent=state.activeRun.name;
   $('#run-progress').style.width=`${passedPercent(state.activeRun)}%`;$('#run-summary').textContent=`${state.activeRun.passed_count||0} passed · ${state.activeRun.failed_count||0} failed · ${state.activeRun.untested_count||0} untested`;
   $('#tests-list').innerHTML='<div class="skeleton"></div><div class="skeleton"></div>';showCaseEmpty();
   try{const data=await api('/api/tests',{run_id:id});state.tests=data.tests;renderTests()}
@@ -162,7 +168,7 @@ async function disconnectWireless(){
 }
 
 async function connectWireless(){const button=$('#connect-wireless');button.disabled=true;try{const result=await api('/api/device/android-wireless',{host:$('#wireless-host').value,port:$('#wireless-port').value,pairing_code:$('#wireless-code').value});$('#wireless-code').value='';showToast(`Android conectado: ${result.endpoint}`);await refreshDevices()}catch(error){showToast(error.message,true)}finally{button.disabled=false}}
-function openUpdateDialog(){if(!state.currentCase)return;$('#dialog-case').textContent=`C${state.currentCase.id} · ${state.currentCase.title}`;$('#device-step').hidden=false;$('#recording-step').hidden=true;$('#continue-update').textContent='Adelante';$('#cancel-update').textContent='Cancelar';$('#update-dialog').showModal();refreshDevices()}
+function openUpdateDialog(){if(!state.currentCase)return;$('#dialog-case').textContent=`C${state.currentCase.id} · ${state.currentCase.title}`;$('#dialog-target').textContent=runConfig(state.activeRun)?`Este run apunta a: ${runConfig(state.activeRun)}`:'';$('#dialog-target').hidden=!runConfig(state.activeRun);$('#device-step').hidden=false;$('#recording-step').hidden=true;$('#continue-update').textContent='Adelante';$('#cancel-update').textContent='Cancelar';$('#update-dialog').showModal();refreshDevices()}
 async function closeUpdateDialog(){
   if(state.session){
     if(!window.confirm('¿Cancelar la grabación? Las capturas temporales se eliminarán.'))return;

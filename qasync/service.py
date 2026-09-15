@@ -213,7 +213,7 @@ class QASyncService:
         "id", "name", "description", "created_on", "is_completed", "url",
         "passed_count", "blocked_count", "untested_count", "retest_count",
         "failed_count", "custom_status1_count", "custom_status2_count",
-        "plan_id", "suite_id", "entry_name", "project_id",
+        "plan_id", "suite_id", "entry_name", "project_id", "config", "config_ids",
     )
 
     def _public_run(self, run: dict[str, Any]) -> dict[str, Any]:

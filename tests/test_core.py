@@ -1422,7 +1422,7 @@ class ServiceTests(unittest.TestCase):
         client.get_plans.return_value = [{"id": 200787, "name": "SuperPOS M&S", "passed_count": 2}]
         client.get_plan_runs.return_value = [
             {"id": 200788, "name": "Master Testing", "plan_id": 200787, "suite_id": 80906,
-             "entry_name": "SuperPOS iOS"}
+             "entry_name": "SuperPOS iOS", "config": "Android Phone", "config_ids": [1354]}
         ]
         client.get_run.return_value = {"id": 200788, "name": "Master Testing", "plan_id": 200787}
         service = QASyncService(config())
@@ -1435,6 +1435,10 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(inside["id"], 200788)
         self.assertEqual(inside["entry_name"], "SuperPOS iOS")
         self.assertEqual(inside["suite_id"], 80906)
+        # La configuración es lo único que distingue dos runs del mismo plan: sin
+        # ella, "Android Phone" y "Android Tablet" se ven idénticos en la lista.
+        self.assertEqual(inside["config"], "Android Phone")
+        self.assertEqual(inside["config_ids"], [1354])
 
         pasted = service.run({"run_id": "https://x.testrail.com/index.php?/runs/view/200788&display=tree"})
         self.assertEqual(pasted["run"]["id"], 200788)
