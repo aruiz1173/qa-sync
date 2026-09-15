@@ -1,0 +1,12 @@
+# Los scripts POSIX tienen que llegar con LF: con core.autocrlf activo en Windows,
+# un clon en macOS los recibía con CRLF y fallaban con "bad interpreter: /bin/sh^M".
+* text=auto eol=lf
+*.sh text eol=lf
+*.command text eol=lf
+
+# Batch de Windows sí quiere CRLF: con LF los saltos a etiqueta pueden romperse.
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+*.png binary
+*.svg text eol=lf

@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="QA Sync: actualización visual local de casos móviles en TestRail">
+  <title>QA Sync · Mobile Test Studio</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="product"><span class="product-mark" aria-hidden="true">QS</span><span>QA Sync</span><span class="local-badge">Local</span></div>
+    <div class="project-picker"><label for="project-select">Proyecto</label><select id="project-select" disabled><option>Conectando con TestRail</option></select></div>
+    <div class="top-actions"><div id="connection" class="connection"><span></span>Comprobando configuración</div><button id="open-matrix" class="secondary" type="button">Matriz</button><button id="export-audit" class="secondary" type="button">Auditoría</button><button id="open-settings" class="secondary" type="button">Configuración</button></div>
+  </header>
+
+  <main class="dashboard">
+    <aside class="runs-pane pane">
+      <div class="pane-head"><div><p class="overline">TestRail</p><h1>Runs</h1></div><button id="refresh-runs" class="icon-button" type="button">Actualizar</button></div>
+      <div class="filter-row"><button class="filter active" type="button">Activos</button></div>
+      <div class="search-wrap"><input id="run-locator" type="search" placeholder="Pega la URL de un run y Enter"></div>
+      <div id="runs-list" class="runs-list"><div class="skeleton tall"></div><div class="skeleton tall"></div><div class="skeleton tall"></div></div>
+    </aside>
+
+    <section class="tests-pane pane">
+      <div id="run-empty" class="empty compact"><span class="empty-box"></span><h2>Elige un run</h2><p>Sus casos aparecerán aquí.</p></div>
+      <div id="run-content" hidden>
+        <div class="pane-head stacked"><p id="run-label" class="overline">RUN</p><h2 id="run-name">—</h2><div class="progress"><span id="run-progress"></span></div><p id="run-summary" class="summary"></p></div>
+        <div class="search-wrap"><input id="case-search" type="search" placeholder="Buscar caso o C123"></div>
+        <div id="tests-list" class="tests-list"></div>
+      </div>
+    </section>
+
+    <article class="case-pane pane">
+      <div id="case-empty" class="empty"><span class="case-glyph"><i></i><i></i><i></i></span><h2>Selecciona un caso</h2><p>Revisa sus pasos y actualízalo desde un dispositivo.</p></div>
+      <div id="case-loading" class="case-loading" hidden><div class="skeleton title"></div><div class="skeleton"></div><div class="skeleton"></div></div>
+      <div id="case-content" hidden>
+        <div class="case-top"><div><p id="case-id" class="overline">CASE</p><h2 id="case-title">—</h2></div><div class="case-actions"><button id="history-case" class="secondary" type="button">Historial</button><button id="update-case" class="primary" type="button">Actualizar</button></div></div>
+        <div class="case-meta"><span id="case-refs">Sin referencias</span><span id="case-estimate">Sin estimación</span></div>
+        <section class="case-section"><h3>Precondiciones</h3><p id="case-preconditions" class="prose">—</p></section>
+        <section class="case-section"><h3>Pasos</h3><ol id="case-steps" class="steps"></ol></section>
+      </div>
+      <div id="proposal-content" hidden></div>
+    </article>
+  </main>
+
+  <dialog id="update-dialog">
+    <div class="dialog-head"><div><p class="overline">ACTUALIZAR TC</p><h2 id="dialog-case">—</h2></div><button id="close-dialog" class="close-button" type="button">Cerrar</button></div>
+    <div id="device-step">
+      <p class="dialog-intro">Selecciona dónde ejecutarás el recorrido. La evidencia se captura mientras interactúas con la aplicación.</p>
+      <label>Plataforma</label>
+      <div class="segmented"><label><input type="radio" name="platform" value="android" checked><span>Android</span></label><label><input type="radio" name="platform" value="ios"><span>iOS</span></label></div>
+      <label for="device-select">Dispositivo</label>
+      <div class="device-select-row"><select id="device-select"><option>Buscando dispositivos</option></select><button id="refresh-devices" class="secondary" type="button">Actualizar lista</button></div>
+      <details id="android-wireless"><summary>Conectar Android por Wi‑Fi</summary><p class="dialog-intro">Usa la IP privada y el puerto de Wireless Debugging. El código es opcional si el dispositivo ya fue emparejado.</p><div class="device-select-row"><input id="wireless-host" inputmode="decimal" placeholder="192.168.1.20"><input id="wireless-port" inputmode="numeric" placeholder="Puerto"></div><div class="device-select-row"><input id="wireless-code" inputmode="numeric" maxlength="6" placeholder="Código de 6 dígitos opcional"><button id="connect-wireless" class="secondary" type="button">Conectar</button></div><div class="device-select-row"><button id="discover-wireless" class="secondary" type="button">Buscar en la red</button><button id="disconnect-wireless" class="secondary" type="button">Desconectar</button></div><p class="dialog-intro">O si el dispositivo está por USB, pásalo a Wi‑Fi sin código: se lee su IP, se reinicia adbd en modo TCP y se reconecta solo.</p><div class="device-select-row"><button id="usb-to-wireless" class="secondary" type="button">Pasar el USB seleccionado a Wi‑Fi</button></div><div id="wireless-found" class="wireless-found"></div></details>
+      <details id="android-state"><summary>Estado inicial reproducible de Android</summary><p class="dialog-intro">Opcional. Limpiar datos elimina el estado local de esa app en el dispositivo seleccionado.</p><label>Package Android<input id="android-package" maxlength="180" placeholder="com.example.app"></label><label>Deep link inicial<input id="android-deep-link" maxlength="1000" placeholder="https://example.test/checkout"></label><label class="wide fallback-control"><span><input id="android-reset-data" type="checkbox"> Limpiar datos de esta app antes del recorrido</span></label></details>
+      <label for="context">Contexto <span>Opcional</span></label>
+      <textarea id="context" maxlength="3000" placeholder="Datos de prueba, variante del flujo o resultado que esperas validar."></textarea>
+    </div>
+    <div id="recording-step" class="recording-step" hidden><div class="recording-visual"><span></span></div><h3>Grabando recorrido</h3><p>Haz una acción a la vez y espera a que la pantalla termine de cambiar. QA Sync comparará cada estado para reconstruir el recorrido.</p><strong id="recording-count">0 pantallas · 0s</strong><div id="recording-warnings" class="recording-warnings" hidden></div><div id="appium-control" class="appium-control" hidden><p id="guided-control-label">Control guiado: toca o arrastra directamente sobre la pantalla. Así se captura evidencia antes y después de cada acción.</p><img id="appium-screen" alt="Pantalla del dispositivo para control guiado" draggable="false"><div class="appium-text"><input id="appium-text" maxlength="500" autocomplete="off" placeholder="Texto de prueba"><button id="appium-send-text" class="secondary" type="button">Escribir</button></div></div></div>
+    <div class="dialog-actions"><button id="cancel-update" class="secondary" type="button">Cancelar</button><button id="continue-update" class="primary" type="button">Adelante</button></div>
+  </dialog>
+
+  <dialog id="history-dialog">
+    <div class="dialog-head"><div><p class="overline">RESPALDOS LOCALES</p><h2 id="history-title">Historial</h2></div><button id="close-history" class="close-button" type="button">Cerrar</button></div>
+    <p class="dialog-intro">Cada actualización guarda los campos anteriores. La restauración se bloquea si alguien modificó el caso después.</p>
+    <div id="history-list" class="history-list"></div>
+  </dialog>
+
+  <dialog id="matrix-dialog">
+    <div class="dialog-head"><div><p class="overline">COBERTURA LOCAL</p><h2>Matriz de dispositivos</h2></div><button id="close-matrix" class="close-button" type="button">Cerrar</button></div>
+    <p class="dialog-intro matrix-intro">Se alimenta al actualizar casos y conserva dispositivo, plataforma y versión detectada.</p>
+    <div id="matrix-list" class="history-list matrix-list"></div>
+  </dialog>
+
+  <dialog id="settings-dialog" class="settings-dialog">
+    <form id="settings-form">
+      <div class="dialog-head"><div><p class="overline">CONFIGURACIÓN PERSONAL</p><h2>Conecta tus herramientas</h2></div><button id="close-settings" class="close-button" type="button">Cerrar</button></div>
+      <div class="settings-body">
+        <section class="settings-section">
+          <div><h3>Perfil de equipo/proyecto</h3><p>Guarda campos, plataformas y proveedor sin copiar credenciales.</p></div>
+          <div class="settings-fields">
+            <label class="wide">Perfil guardado<select id="profile-select"><option value="">Perfil actual sin nombre</option></select></label>
+            <label>Nombre del perfil<input id="profile-name" maxlength="80" placeholder="Android · Checkout"></label>
+            <div class="profile-actions"><button id="save-profile" class="secondary" type="button">Guardar perfil</button><button id="load-profile" class="secondary" type="button">Activar</button><button id="delete-profile" class="secondary" type="button">Eliminar</button></div>
+          </div>
+        </section>
+        <section class="settings-section">
+          <div><h3>TestRail</h3><p>La instancia y cuenta que se usarán para leer runs y actualizar casos.</p></div>
+          <div class="settings-fields">
+            <label class="wide">URL de TestRail<input id="setting-testrail-url" name="testrail_url" type="url" placeholder="https://equipo.testrail.io"></label>
+            <label>Correo<input id="setting-testrail-email" name="testrail_email" type="email" placeholder="nombre@empresa.com"></label>
+            <label>API key<input id="setting-testrail-key" name="testrail_api_key" type="password" placeholder="Dejar vacío para conservar"></label>
+            <label>Proyecto preferido<input id="setting-project-id" name="testrail_project_id" inputmode="numeric" placeholder="Opcional"></label>
+          </div>
+        </section>
+        <section class="settings-section">
+          <div><h3>Visión</h3><p>Cada persona debe elegir qué cuenta y límite de uso empleará.</p></div>
+          <div class="settings-fields">
+            <label class="wide">Proveedor<select id="setting-vision-provider" name="vision_provider" required><option value="">Elige un proveedor…</option><option value="codex">Codex · límite de tu plan</option><option value="claude">Claude · límite de tu plan</option><option value="openai_api">OpenAI API · facturación separada</option></select></label>
+            <label class="wide">Calidad, cantidad y uso<select id="setting-vision-quality" name="vision_quality"><option value="economical">Eficiente · hasta 8 pantallas · 1 llamada · detalle reducido</option><option value="high">Alta · todas las pantallas · 1 llamada · detalle alto</option><option value="maximum">Máxima · todas las pantallas · 2 llamadas · doble revisión</option></select></label>
+            <label data-provider-field="openai_api">OpenAI API key<input id="setting-openai-key" name="openai_api_key" type="password" placeholder="Dejar vacío para conservar"></label>
+            <label data-provider-field="openai_api">Modelo OpenAI API<input id="setting-openai-model" name="openai_model" placeholder="gpt-4o"></label>
+            <label data-provider-field="codex">Modelo Codex<input id="setting-codex-model" name="codex_model" placeholder="Vacío usa el predeterminado"></label>
+            <label data-provider-field="claude">Modelo Claude<input id="setting-claude-model" name="claude_model" placeholder="Vacío usa el predeterminado"></label>
+            <div id="provider-status" class="provider-status wide">Consultando disponibilidad local…</div>
+            <label class="wide fallback-control"><span><input id="setting-allow-fallback" type="checkbox"> Autorizar cambio automático si se agota el límite</span></label>
+            <label class="wide fallback-control" id="fallback-provider-wrap">Proveedor alterno<select id="setting-fallback-provider"><option value="">Elige proveedor alterno…</option><option value="codex">Codex</option><option value="claude">Claude</option></select></label>
+            <label>Pantallas por recorrido<input id="setting-max-images" name="max_images" type="number" min="2" max="30"></label>
+            <label>Duración máxima (segundos)<input id="setting-max-recording-seconds" name="max_recording_seconds" type="number" min="60" max="3600"></label>
+            <label>Modo de escritura<select id="setting-write-mode" name="write_mode"><option value="confirm">Confirmar y actualizar</option><option value="review_only">Sólo simulación</option></select></label>
+            <label>URL de Appium<input id="setting-appium-url" name="appium_url" type="url" placeholder="http://127.0.0.1:4723"></label>
+            <label>Bundle ID de iOS<input id="setting-ios-bundle-id" name="ios_bundle_id" placeholder="com.example.app"></label>
+            <label class="wide">Capabilities adicionales de Appium (JSON)<input id="setting-appium-capabilities" name="appium_capabilities_json" placeholder='{"appium:xcodeOrgId":"TEAM_ID"}'></label>
+            <label class="wide">Dispositivos iOS remotos (JSON)<input id="setting-ios-devices" name="ios_devices_json" placeholder='[{"id":"UDID","name":"iPhone QA","version":"18.1"}]'></label>
+          </div>
+        </section>
+        <details class="advanced-settings">
+          <summary>Mapeo avanzado de campos</summary>
+          <p>Usa los system names configurados por el administrador de TestRail.</p>
+          <div class="settings-fields">
+            <label>Campo de pasos<input id="setting-steps-field" name="testrail_steps_field"></label>
+            <label>Campo de precondiciones<input id="setting-preconditions-field" name="testrail_preconditions_field"></label>
+            <label>Campo de plataforma<input id="setting-platform-field" name="testrail_platform_field" placeholder="Opcional"></label>
+            <label>Valor Android<input id="setting-android-value" name="testrail_android_value" placeholder="Opcional"></label>
+            <label>Valor iOS<input id="setting-ios-value" name="testrail_ios_value" placeholder="Opcional"></label>
+          </div>
+        </details>
+        <p id="secret-storage-note" class="security-note"></p>
+      </div>
+      <div class="dialog-actions"><button id="cancel-settings" class="secondary" type="button">Cancelar</button><button id="save-settings" class="primary" type="submit">Guardar y conectar</button></div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
