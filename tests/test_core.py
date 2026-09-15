@@ -3,6 +3,7 @@ import email
 import io
 import json
 import os
+import re
 import socket
 import subprocess
 import tempfile
@@ -98,6 +99,38 @@ class CaseIdTests(unittest.TestCase):
             load_dotenv(dotenv)
             self.assertEqual(os.environ.pop("QA_SYNC_LITERAL"), f"$(touch {marker})")
             self.assertFalse(marker.exists())
+
+    def test_dashboard_never_demands_more_width_than_its_breakpoint(self):
+        """El ancho mínimo de la rejilla debe caber en el viewport donde se aplica.
+
+        Tenía dos bandas con scroll horizontal: columnas de 280+360+440=1080px con el
+        corte en 1000px, y de 240+310+400=950px con el corte en 760px.
+        """
+        css = (Path(__file__).resolve().parents[1] / "qasync" / "static" / "styles.css").read_text(encoding="utf-8")
+
+        def minimum_width(columns: str) -> int:
+            return sum(
+                int(track[0] or track[1])
+                for track in re.findall(r"minmax\(\s*(\d+)px[^)]*\)|(\d+)px", columns)
+            )
+
+        # El punto de apilado es donde .dashboard pasa a una sola columna, no el
+        # breakpoint más grande: en el CSS roto ese era un tramo intermedio.
+        stack_at = None
+        for block in re.finditer(r"@media\(max-width:(\d+)px\)\{(.*?)\}\}", css, re.DOTALL):
+            if re.search(r"\.dashboard\{[^}]*grid-template-columns:\s*1fr\b", block.group(2)):
+                stack_at = int(block.group(1))
+        self.assertIsNotNone(stack_at, "no se encontró el breakpoint que apila el dashboard")
+
+        multi = re.findall(r"\.dashboard\{[^}]*grid-template-columns:((?:(?!1fr\b)[^;}])+)", css)
+        self.assertTrue(multi, "no se encontró la rejilla de varias columnas")
+        for columns in multi:
+            required = minimum_width(columns)
+            self.assertLessEqual(
+                required, stack_at,
+                f"la rejilla pide {required}px y sólo se apila bajo {stack_at}px: "
+                f"entre ambos hay scroll horizontal",
+            )
 
     def test_distribution_is_standalone_and_has_its_own_ui(self):
         root = Path(__file__).resolve().parents[1]
