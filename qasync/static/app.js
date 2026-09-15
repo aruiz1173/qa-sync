@@ -32,16 +32,25 @@ function runItemHtml(run){
   return `<button class="run-item${state.activeRun?.id===run.id?' active':''}" data-run="${run.id}" type="button"><strong>${escapeHtml(run.name)}</strong>${suite}<div class="mini-progress"><span style="width:${passedPercent(run)}%"></span></div><div class="run-meta"><span>R${run.id}</span><span>${run.passed_count||0} de ${total} passed</span></div></button>`;
 }
 
+// El mismo campo filtra y abre: un proyecto puede traer 148 planes, y una lista
+// plana de ese tamaño no se navega. Si lo escrito parece una URL o un id, Enter lo abre.
+const matchesQuery=(item,prefix,query)=>!query||`${item.name||''} ${prefix}${item.id}`.toLowerCase().includes(query);
+
 function renderRuns(){
+  const query=$('#run-locator').value.trim().toLowerCase();
   const pasted=state.pastedRun&&!state.runs.some(run=>run.id===state.pastedRun.id)?runItemHtml(state.pastedRun):'';
-  const runs=state.runs.map(runItemHtml).join('');
-  const plans=state.plans.map(plan=>{
+  const runs=state.runs.filter(run=>matchesQuery(run,'r',query)).map(runItemHtml).join('');
+  const plans=state.plans.filter(plan=>matchesQuery(plan,'p',query)).map(plan=>{
     const open=state.expandedPlan===plan.id;
-    const nested=open?`<div class="plan-runs">${(state.planRuns[plan.id]||[]).map(runItemHtml).join('')||'<div class="run-meta">Este plan no tiene runs.</div>'}</div>`:'';
+    const inside=(state.planRuns[plan.id]||[]).filter(run=>matchesQuery(run,'r',query));
+    const nested=open?`<div class="plan-runs">${inside.map(runItemHtml).join('')||'<div class="run-meta">Sin runs que coincidan.</div>'}</div>`:'';
     return `<button class="run-item plan-item" data-plan="${plan.id}" type="button"><strong>${open?'▾':'▸'} ${escapeHtml(plan.name)}<span class="plan-badge">PLAN</span></strong><div class="run-meta"><span>P${plan.id}</span><span>${plan.passed_count||0} de ${totalForRun(plan)} passed</span></div></button>${nested}`;
   }).join('');
   const body=pasted+runs+plans;
-  $('#runs-list').innerHTML=body||'<div class="empty"><h2>Sin runs activos</h2><p>Este proyecto no tiene runs ni planes abiertos.</p></div>';
+  const empty=query
+    ?`<div class="empty"><h2>Sin coincidencias</h2><p>Nada con “${escapeHtml($('#run-locator').value.trim())}”. Si es la URL de un run, pulsa Enter para abrirlo.</p></div>`
+    :'<div class="empty"><h2>Sin runs activos</h2><p>Este proyecto no tiene runs ni planes abiertos.</p></div>';
+  $('#runs-list').innerHTML=body||empty;
   document.querySelectorAll('[data-run]').forEach(button=>button.addEventListener('click',()=>selectRun(Number(button.dataset.run))));
   document.querySelectorAll('[data-plan]').forEach(button=>button.addEventListener('click',()=>togglePlan(Number(button.dataset.plan))));
 }
@@ -257,6 +266,7 @@ async function saveSettings(event){
 $('#discover-wireless').addEventListener('click',discoverWireless);
 $('#usb-to-wireless').addEventListener('click',usbToWireless);
 $('#disconnect-wireless').addEventListener('click',disconnectWireless);
+$('#run-locator').addEventListener('input',renderRuns);
 $('#run-locator').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();openLocatorRun()}});
 $('#project-select').addEventListener('change',()=>{state.activeRun=null;showCaseEmpty();$('#run-content').hidden=true;$('#run-empty').hidden=false;loadRuns()});
 $('#refresh-runs').addEventListener('click',loadRuns);$('#case-search').addEventListener('input',renderTests);$('#update-case').addEventListener('click',openUpdateDialog);$('#close-dialog').addEventListener('click',closeUpdateDialog);$('#cancel-update').addEventListener('click',closeUpdateDialog);$('#continue-update').addEventListener('click',continueUpdate);$('#refresh-devices').addEventListener('click',refreshDevices);document.querySelectorAll('input[name="platform"]').forEach(input=>input.addEventListener('change',renderDevices));$('#update-dialog').addEventListener('cancel',event=>{if(state.session){event.preventDefault();showToast('Finaliza el recorrido antes de cerrar.',true)}});
