@@ -28,6 +28,7 @@ PUBLIC_FIELDS = {
     "max_images",
     "max_recording_seconds",
     "capture_interval",
+    "hourly_rate_usd",
     "appium_url",
     "ios_bundle_id",
     "appium_capabilities_json",
@@ -112,6 +113,7 @@ class SettingsManager:
             values.get("max_recording_seconds", 900)
         )
         values["capture_interval"] = self._capture_interval(values.get("capture_interval", 1.25))
+        values["hourly_rate_usd"] = self._hourly_rate(values.get("hourly_rate_usd", 0))
         self._validate(values)
         return Config(**values)
 
@@ -140,6 +142,8 @@ class SettingsManager:
                 value = self._max_recording_seconds(value)
             elif key == "capture_interval":
                 value = self._capture_interval(value)
+            elif key == "hourly_rate_usd":
+                value = self._hourly_rate(value)
             elif key == "allow_provider_fallback":
                 value = value is True or str(value).strip().lower() in {"1", "true", "yes", "on"}
             else:
@@ -217,6 +221,18 @@ class SettingsManager:
         if not 2 <= parsed <= 30:
             raise ValidationError("El límite de pantallas debe estar entre 2 y 30.")
         return parsed
+
+    @staticmethod
+    def _hourly_rate(value: Any) -> float:
+        """Tarifa para expresar el tiempo en dinero. Sin ella no se convierte nada:
+        inventar la tarifa sería inventar la cifra que domina el resultado."""
+        try:
+            parsed = float(value or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError("The hourly rate must be a number.") from exc
+        if not 0 <= parsed <= 10000:
+            raise ValidationError("The hourly rate must be between 0 and 10000.")
+        return round(parsed, 2)
 
     @staticmethod
     def _capture_interval(value: Any) -> float:

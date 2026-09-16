@@ -1746,6 +1746,39 @@ class ServiceTests(unittest.TestCase):
                 with self.subTest(name=blank), self.assertRaisesRegex(ValidationError, "name"):
                     service.save_draft({"proposal_token": token, "name": blank})
 
+    def test_averages_skip_cases_whose_provider_reported_nothing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service = QASyncService(config(), ProposalStore())
+            service.drafts = DraftStore(Path(directory) / "drafts.json")
+            rows = [
+                {"usage": {"cost_usd": 0.30, "duration_ms": 6000}},
+                {"usage": {"cost_usd": 0.10, "duration_ms": 2000}},
+                # Analizado con Codex: no informa nada.
+                {"usage": {"model_calls": 1}},
+                {"usage": {}},
+            ]
+            summary = service._spend_summary(rows)
+        self.assertEqual(summary["applied"]["cases"], 4)
+        self.assertAlmostEqual(summary["cost_usd"], 0.40)
+        # Promediar entre los cuatro daría 0.10 y parecería barato cuando en realidad
+        # dos casos son desconocidos.
+        self.assertEqual(summary["average"]["measured_cases"], 2)
+        self.assertAlmostEqual(summary["average"]["cost_usd"], 0.20)
+        self.assertEqual(summary["average"]["seconds"], 4.0)
+        # Sin tarifa configurada no se convierte tiempo a dinero.
+        self.assertNotIn("time_cost_usd", summary["average"])
+        self.assertNotIn("hourly_rate_usd", summary)
+
+    def test_time_becomes_money_only_with_a_configured_rate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service = QASyncService(config(hourly_rate_usd=90.0), ProposalStore())
+            service.drafts = DraftStore(Path(directory) / "drafts.json")
+            summary = service._spend_summary([{"usage": {"cost_usd": 0.3, "duration_ms": 120000}}])
+        # 120 s a 90 USD/h = 3 USD.
+        self.assertEqual(summary["average"]["seconds"], 120.0)
+        self.assertAlmostEqual(summary["average"]["time_cost_usd"], 3.0)
+        self.assertEqual(summary["hourly_rate_usd"], 90.0)
+
     def test_spend_is_summed_from_what_providers_reported(self):
         analyzer = VisionAnalyzer.__new__(VisionAnalyzer)
         analyzer._spend = {}

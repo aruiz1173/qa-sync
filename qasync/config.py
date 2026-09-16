@@ -51,6 +51,7 @@ class Config:
     max_images: int = 16
     max_recording_seconds: int = 900
     capture_interval: float = 1.25
+    hourly_rate_usd: float = 0.0
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -81,6 +82,7 @@ class Config:
             max_images=_env_int("QA_SYNC_MAX_IMAGES", 16),
             max_recording_seconds=_env_int("QA_SYNC_MAX_RECORDING_SECONDS", 900),
             capture_interval=_env_float("QA_SYNC_CAPTURE_INTERVAL", 1.25),
+            hourly_rate_usd=_env_float("QA_SYNC_HOURLY_RATE_USD", 0.0),
         )
 
     @property

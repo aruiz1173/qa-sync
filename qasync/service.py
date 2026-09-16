@@ -715,18 +715,50 @@ class QASyncService:
                 for key, value in sorted(summed.items())
             }
 
+        def averages(items: list[dict[str, Any]]) -> dict[str, Any]:
+            """Promedios sobre los casos que sí traen dato.
+
+            Promediar sobre todos hundiría la cifra con los análisis de Codex, que no
+            informa nada: parecería barato cuando en realidad se desconoce.
+            """
+            costed = [
+                item["usage"] for item in items
+                if isinstance(item.get("usage"), dict) and float(item["usage"].get("cost_usd") or 0) > 0
+            ]
+            timed = [
+                item["usage"] for item in items
+                if isinstance(item.get("usage"), dict) and float(item["usage"].get("duration_ms") or 0) > 0
+            ]
+            result: dict[str, Any] = {"measured_cases": len(costed), "timed_cases": len(timed)}
+            if costed:
+                result["cost_usd"] = round(sum(float(u.get("cost_usd") or 0) for u in costed) / len(costed), 6)
+            if timed:
+                seconds = sum(float(u.get("duration_ms") or 0) for u in timed) / len(timed) / 1000
+                result["seconds"] = round(seconds, 1)
+            return result
+
         drafts = self.drafts.list()
-        applied = total(rows)
-        pending = total(drafts)
-        return {
+        applied, pending = total(rows), total(drafts)
+        every = rows + drafts
+        mean = averages(every)
+        summary: dict[str, Any] = {
             "applied": {**applied, "cases": len(rows)},
             "drafts": {**pending, "cases": len(drafts)},
             "cost_usd": round(float(applied.get("cost_usd", 0)) + float(pending.get("cost_usd", 0)), 6),
+            "average": mean,
             "note": (
-                "Summed from what each provider reported. Codex does not report tokens or cost, "
-                "so analyses run through it count as zero rather than an estimate."
+                "Summed from what each provider reported. Codex reports neither tokens nor cost, "
+                "so analyses run through it count as zero and are left out of the averages "
+                "rather than counted as free."
             ),
         }
+        rate = self.config.hourly_rate_usd
+        if rate > 0 and mean.get("seconds"):
+            # Sólo con una tarifa configurada: convertir tiempo a dinero sin ella
+            # sería inventar la cifra que más pesa en el resultado.
+            summary["average"]["time_cost_usd"] = round(mean["seconds"] / 3600 * rate, 4)
+            summary["hourly_rate_usd"] = rate
+        return summary
 
     def device_matrix(self) -> dict[str, Any]:
         rows: dict[tuple[str, str], dict[str, Any]] = {}
