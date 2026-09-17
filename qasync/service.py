@@ -489,6 +489,7 @@ class QASyncService:
         analysis = VisionAnalyzer(self.config).analyze(
             style_samples=self._style_samples(client, current, request.get("project_id")),
             target_config=str(request.get("target_config", ""))[:200],
+            case_template=self.config.case_template,
             platform=platform,
             images=request.get("images") or [],
             context=str(request.get("context", ""))[:12000],
@@ -695,6 +696,10 @@ class QASyncService:
             "version": 1, "generated_at": int(time.time()), "records": rows, "count": len(rows),
             "spend": self._spend_summary(rows),
         }
+
+    def spend(self) -> dict[str, Any]:
+        """Sólo el resumen: mostrar cuatro cifras no debe descargar mil filas de auditoría."""
+        return {"spend": self._spend_summary(self.history.audit())}
 
     def _spend_summary(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
         """Lo consumido por los casos ya aplicados, más lo que espera en borradores.

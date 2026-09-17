@@ -72,9 +72,18 @@
   </dialog>
 
   <dialog id="drafts-dialog">
-    <div class="dialog-head"><div><p class="overline">SAVED LOCALLY</p><h2>Drafts</h2></div><button id="close-drafts" class="close-button" type="button">Close</button></div>
-    <p class="dialog-intro">A draft never expires and is never written to TestRail. Reopen one to keep editing, then apply it when it is ready.</p>
-    <div id="drafts-list" class="history-list"></div>
+    <div class="dialog-head"><div><p class="overline">SAVED LOCALLY</p><h2>Template and drafts</h2></div><button id="close-drafts" class="close-button" type="button">Close</button></div>
+    <section class="settings-section">
+      <div><strong>Case template</strong><p>The skeleton every generated case must follow. It wins over the style taken from sibling cases, and is sent with every analysis.</p></div>
+      <div class="settings-fields">
+        <label class="wide">Template<textarea id="case-template" maxlength="4000" rows="8" placeholder="Title: Verify &lt;behaviour&gt; (&lt;variant&gt;) - &lt;auth&gt;&#10;&#10;Preconditions:&#10;&lt;ul&gt;&lt;li&gt;Account state&lt;/li&gt;&lt;/ul&gt;&#10;&#10;Each step:&#10;&lt;p&gt;Action&lt;/p&gt; with expected result as &lt;ul&gt;&lt;li&gt;Verify …&lt;/li&gt;&lt;/ul&gt;"></textarea></label>
+        <div class="profile-actions"><button id="save-template" class="secondary" type="button">Save template</button></div>
+      </div>
+    </section>
+    <section class="settings-section">
+      <div><strong>Drafts by case</strong><p>A draft never expires and is never written to TestRail. Reopen one to keep editing, then apply it when it is ready.</p></div>
+      <div id="drafts-list" class="history-list"></div>
+    </section>
   </dialog>
 
   <dialog id="matrix-dialog">

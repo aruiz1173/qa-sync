@@ -104,6 +104,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     result = self.service.providers()
                 elif path == "/api/audit":
                     result = self.service.audit_report()
+                elif path == "/api/spend":
+                    result = self.service.spend()
                 elif path == "/api/device-matrix":
                     result = self.service.device_matrix()
                 elif path == "/api/settings":

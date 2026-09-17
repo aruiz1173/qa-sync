@@ -29,6 +29,7 @@ PUBLIC_FIELDS = {
     "max_recording_seconds",
     "capture_interval",
     "hourly_rate_usd",
+    "case_template",
     "appium_url",
     "ios_bundle_id",
     "appium_capabilities_json",
@@ -264,6 +265,10 @@ class SettingsManager:
         appium_url = values["appium_url"] = _validated_service_url(
             values.get("appium_url"), "Appium", "http://127.0.0.1:4723"
         )
+        template = str(values.get("case_template", "") or "")
+        if len(template) > 4000:
+            raise ValidationError("The case template must be 4000 characters or fewer.")
+        values["case_template"] = template.strip()
         bundle_id = str(values.get("ios_bundle_id", "")).strip()
         if bool(appium_url) != bool(bundle_id):
             raise ValidationError("Set the Appium URL and the iOS bundle ID together.")

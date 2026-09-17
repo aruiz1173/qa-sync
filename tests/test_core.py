@@ -384,6 +384,29 @@ class ImageTests(unittest.TestCase):
         self.assertIn("iPad", review)
         self.assertIn("word for word", review)
 
+    def test_template_outranks_the_style_taken_from_siblings(self):
+        # Los ejemplos muestran cómo se escriben los casos hermanos; la plantilla dice
+        # cómo decidió el equipo que deben escribirse, así que manda donde discrepen.
+        template = "Title: Verify <behaviour> (<variant>) - <auth>\nSteps: <p>Action</p>"
+        samples = [{"title": "Verify mode", "steps": [{"content": "<p>Sign in</p>", "expected": "ok"}]}]
+        prompt = _prompt("android", "", {"id": 7}, 3, samples, "", template)
+        self.assertIn("Case template", prompt)
+        self.assertIn("the template wins", prompt)
+        self.assertIn("Verify <behaviour>", prompt)
+        # Es estructura, no contenido: el relleno de ejemplo no debe copiarse.
+        self.assertIn("do not copy its placeholder text", prompt)
+        # Y es texto de TestRail igual que el resto: no se confía en él.
+        self.assertIn("untrusted data", prompt)
+        # Sin plantilla no se cuela una sección vacía.
+        for empty in ("", None, "   "):
+            with self.subTest(template=empty):
+                self.assertNotIn("Case template", _prompt("android", "", {"id": 7}, 3, samples, "", empty))
+
+    def test_template_reaches_the_reviewer_too(self):
+        # Si la segunda pasada no la conoce, deshace la estructura que impuso la primera.
+        review = _review_prompt("android", {"title": "x"}, 3, "", {"id": 7}, [], "", "Title: Verify <x>")
+        self.assertIn("Case template", review)
+
     def test_style_reference_demands_the_same_markup_format(self):
         samples = [{"title": "Verify mode", "steps": [
             {"content": "<p>Sign in</p>", "expected": "<ul><li>Lands on POS</li></ul>"}]}]

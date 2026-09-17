@@ -1,5 +1,5 @@
 const $=selector=>document.querySelector(selector);
-const state={projects:[],runs:[],plans:[],planRuns:{},expandedPlan:null,pastedRun:null,tests:[],activeRun:null,activeTest:null,currentCase:null,proposal:null,devices:{android:[],ios:[]},session:null,timer:null,screenTimer:null,mirrors:{}};
+const state={draftId:'',projects:[],runs:[],plans:[],planRuns:{},expandedPlan:null,pastedRun:null,tests:[],activeRun:null,activeTest:null,currentCase:null,proposal:null,devices:{android:[],ios:[]},session:null,timer:null,screenTimer:null,mirrors:{}};
 const escapeHtml=value=>String(value??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
 const showToast=(message,error=false)=>{const el=$('#toast');el.textContent=message;el.className=`toast show${error?' error':''}`;clearTimeout(showToast.timer);showToast.timer=setTimeout(()=>el.className='toast',4200)};
 const api=async(path,body={})=>{const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json().catch(()=>({error:'Invalid response from the server.'}));if(!response.ok)throw new Error(data.error||`Error HTTP ${response.status}`);return data};
@@ -278,8 +278,8 @@ function renderProposal(){
   const simulation=data.write_mode==='review_only';
   const quality=data.vision_quality==='maximum'?'maximum · 2 calls':data.vision_quality==='economical'?'efficient · 1 call':'high · 1 call';
   const usage=data.usage||{};const usageText=usage.model_calls?` · ${usage.frames_analyzed}/${usage.frames_received} screens · ${usage.model_calls} llamada${usage.model_calls===1?'':'s'}`:'';
-  $('#proposal-content').innerHTML=`<button id="back-case" class="secondary back-button" type="button">Back to case</button><div class="proposal-head"><div><p class="overline">PROPOSAL FOR C${data.case_id}</p><h2>Review and edit the update</h2></div><span class="confidence">${Math.round(data.confidence*100)}% confianza</span></div>${data.provider_used?`<p class="provider-used">Analizado con ${escapeHtml(data.provider_used)} · ${quality}${usageText}</p>`:''}${simulation?'<div class="warnings">Dry run is on: you can review and edit, but nothing is written to TestRail.</div>':''}${data.warnings.length?`<div class="warnings">${data.warnings.map(escapeHtml).join('<br>')}</div>`:''}${editor}<div class="approval"><label for="confirmation">${simulation?'Updating is blocked by configuration.':`Type ${escapeHtml(data.confirmation)} to update TestRail.`}</label><div class="approval-row"><input id="confirmation" autocomplete="off" placeholder="Exact confirmation" ${simulation?'disabled':''}><button id="apply-update" class="primary" type="button" ${simulation?'disabled':''}>Update TestRail</button></div></div>`;
-  $('#back-case').addEventListener('click',renderCase);$('#apply-update').addEventListener('click',applyProposal);$('#add-step').addEventListener('click',()=>{const wrapper=document.createElement('div');wrapper.innerHTML=stepMarkup({content:'',expected:''},document.querySelectorAll('[data-edit-step]').length);$('#steps-editor').append(wrapper.firstElementChild);bindStepEditor()});bindStepEditor();
+  $('#proposal-content').innerHTML=`<button id="back-case" class="secondary back-button" type="button">Back to case</button><div class="proposal-head"><div><p class="overline">PROPOSAL FOR C${data.case_id}</p><h2>Review and edit the update</h2></div><span class="confidence">${Math.round(data.confidence*100)}% confianza</span></div>${data.provider_used?`<p class="provider-used">Analizado con ${escapeHtml(data.provider_used)} · ${quality}${usageText}</p>`:''}${simulation?'<div class="warnings">Dry run is on: you can review and edit, but nothing is written to TestRail.</div>':''}${data.warnings.length?`<div class="warnings">${data.warnings.map(escapeHtml).join('<br>')}</div>`:''}${editor}<div class="approval"><label for="confirmation">${simulation?'Updating is blocked by configuration.':`Type ${escapeHtml(data.confirmation)} to update TestRail.`}</label><div class="approval-row"><input id="confirmation" autocomplete="off" placeholder="Exact confirmation" ${simulation?'disabled':''}><button id="save-draft" class="secondary" type="button">Save draft</button><button id="apply-update" class="primary" type="button" ${simulation?'disabled':''}>Update TestRail</button></div></div>`;
+  $('#back-case').addEventListener('click',renderCase);$('#apply-update').addEventListener('click',applyProposal);const draftButton=$('#save-draft');if(draftButton)draftButton.addEventListener('click',saveDraft);$('#add-step').addEventListener('click',()=>{const wrapper=document.createElement('div');wrapper.innerHTML=stepMarkup({content:'',expected:''},document.querySelectorAll('[data-edit-step]').length);$('#steps-editor').append(wrapper.firstElementChild);bindStepEditor()});bindStepEditor();
 }
 function renumberSteps(){const steps=[...document.querySelectorAll('[data-edit-step]')];steps.forEach((step,index)=>{step.querySelector('.step-toolbar strong').textContent=`Step ${index+1}`;step.querySelector('[data-direction="up"]').disabled=index===0;step.querySelector('[data-direction="down"]').disabled=index===steps.length-1})}
 function bindStepEditor(){document.querySelectorAll('.step-move').forEach(button=>{button.onclick=()=>{const step=button.closest('[data-edit-step]');const sibling=button.dataset.direction==='up'?step.previousElementSibling:step.nextElementSibling;if(!sibling)return;if(button.dataset.direction==='up')step.parentElement.insertBefore(step,sibling);else step.parentElement.insertBefore(sibling,step);renumberSteps()}});document.querySelectorAll('.step-delete').forEach(button=>{button.onclick=()=>{if(document.querySelectorAll('[data-edit-step]').length===1)return showToast('La propuesta debe conservar al menos un paso.',true);button.closest('[data-edit-step]').remove();renumberSteps()}});renumberSteps()}
@@ -305,11 +305,107 @@ async function applyProposal(){
     missing.field.scrollIntoView({block:'center',behavior:'smooth'});
     return showToast(`Step ${missing.number} needs ${missing.label}.`,true);
   }
-  const button=$('#apply-update');button.disabled=true;const optionalSteps=[...document.querySelectorAll('[data-edit-step]')].flatMap((step,index)=>step.querySelector('.optional-check').checked?[index]:[]);try{state.proposal=await api('/api/proposal/revise',proposalEdits());const result=await api('/api/apply',{proposal_token:state.proposal.proposal_token,confirmation:$('#confirmation').value,optional_steps:optionalSteps});showToast(`C${result.case_id} updated.`);if(state.activeTest)await selectTest(state.activeTest.id);else{state.currentCase=(await api('/api/case',{case_id:result.case_id})).case;renderCase()}}catch(error){showToast(error.message,true);button.disabled=false}}
+  const button=$('#apply-update');button.disabled=true;const optionalSteps=[...document.querySelectorAll('[data-edit-step]')].flatMap((step,index)=>step.querySelector('.optional-check').checked?[index]:[]);try{state.proposal=await api('/api/proposal/revise',proposalEdits());const result=await api('/api/apply',{proposal_token:state.proposal.proposal_token,confirmation:$('#confirmation').value,optional_steps:optionalSteps,draft_id:state.draftId||''});showToast(`C${result.case_id} updated.`);if(state.activeTest)await selectTest(state.activeTest.id);else{state.currentCase=(await api('/api/case',{case_id:result.case_id})).case;renderCase()}}catch(error){showToast(error.message,true);button.disabled=false}}
+
+
+// Plantilla y borradores viven juntos: la plantilla dice qué forma debe tener un
+// caso y los borradores son ese trabajo a medias, agrupados por caso.
+const fmtWhen=value=>{const ms=Number(value||0)*1000;if(!ms)return '';const days=Math.floor((Date.now()-ms)/86400000);return days<=0?'today':days===1?'yesterday':`${days} days ago`};
+
+function renderSpend(spend){
+  const box=$('#spend-summary');
+  if(!box)return;
+  if(!spend){box.innerHTML='';return}
+  const avg=spend.average||{};
+  const rows=[
+    ['Applied cases', `${spend.applied?.cases||0}`],
+    ['Pending drafts', `${spend.drafts?.cases||0}`],
+    ['Total cost', `$${(spend.cost_usd||0).toFixed(4)}`],
+  ];
+  if(avg.cost_usd!==undefined)rows.push([`Average cost (${avg.measured_cases} measured)`,`$${avg.cost_usd.toFixed(4)}`]);
+  if(avg.seconds!==undefined)rows.push([`Average time (${avg.timed_cases} timed)`,`${avg.seconds}s`]);
+  if(avg.time_cost_usd!==undefined)rows.push([`Average time at $${spend.hourly_rate_usd}/h`,`$${avg.time_cost_usd.toFixed(2)}`]);
+  box.innerHTML=`<strong>Spend</strong>${rows.map(([k,v])=>`<div class="spend-row"><span>${escapeHtml(k)}</span><span>${escapeHtml(v)}</span></div>`).join('')}<p class="spend-note">${escapeHtml(spend.note||'')}</p>`;
+}
+
+function renderDrafts(drafts){
+  const box=$('#drafts-list');
+  if(!drafts.length){box.innerHTML='<div class="empty"><p>No drafts saved yet.</p></div>';return}
+  // Agrupados por caso: un mismo caso puede tener uno por dispositivo.
+  const byCase=new Map();
+  for(const draft of drafts){
+    if(!byCase.has(draft.case_id))byCase.set(draft.case_id,[]);
+    byCase.get(draft.case_id).push(draft);
+  }
+  box.innerHTML=[...byCase.entries()].map(([caseId,items])=>
+    `<p class="overline">C${caseId} · ${items.length} draft${items.length>1?'s':''}</p>`+
+    items.map(item=>{
+      const cost=Number(item.usage?.cost_usd||0);
+      const meta=[item.target_config,item.device_name,`${item.steps} steps`,fmtWhen(item.updated_at),cost?`$${cost.toFixed(4)}`:''].filter(Boolean).join(' · ');
+      return `<div class="draft-item"><div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(meta)}</p></div><div class="draft-actions"><button class="secondary" data-open-draft="${escapeHtml(item.id)}" type="button">Open</button><button class="secondary" data-delete-draft="${escapeHtml(item.id)}" type="button">Delete</button></div></div>`;
+    }).join('')
+  ).join('');
+  document.querySelectorAll('[data-open-draft]').forEach(button=>button.addEventListener('click',()=>openDraft(button.dataset.openDraft)));
+  document.querySelectorAll('[data-delete-draft]').forEach(button=>button.addEventListener('click',()=>deleteDraft(button.dataset.deleteDraft)));
+}
+
+async function refreshDrafts(){
+  try{
+    const [drafts,spend]=await Promise.all([api('/api/draft/list'),getJson('/api/spend').catch(()=>null)]);
+    renderDrafts(drafts.drafts||[]);
+    renderSpend(spend?.spend);
+  }catch(error){showToast(error.message,true)}
+}
+
+async function openDraftsDialog(){
+  try{const settings=await getJson('/api/settings');$('#case-template').value=settings.case_template||''}catch(_){}
+  $('#drafts-dialog').showModal();
+  refreshDrafts();
+}
+
+async function saveTemplate(){
+  const button=$('#save-template');button.disabled=true;
+  try{await api('/api/settings',{case_template:$('#case-template').value});showToast('Template saved. It is sent with every analysis.')}
+  catch(error){showToast(error.message,true)}
+  finally{button.disabled=false}
+}
+
+async function openDraft(draftId){
+  try{
+    state.proposal=await api('/api/draft/open',{draft_id:draftId});
+    state.draftId=draftId;
+    $('#drafts-dialog').close();
+    renderProposal();
+    showToast('Draft reopened. Applying re-checks the case in TestRail first.');
+  }catch(error){showToast(error.message,true)}
+}
+
+async function deleteDraft(draftId){
+  if(!window.confirm('Delete this draft? The work in it is lost.'))return;
+  try{const data=await api('/api/draft/delete',{draft_id:draftId});renderDrafts(data.drafts||[])}
+  catch(error){showToast(error.message,true)}
+}
+
+async function saveDraft(){
+  if(!state.proposal)return;
+  const name=window.prompt('Name this draft', state.proposal.changes?.title||`C${state.proposal.case_id}`);
+  if(name===null)return;
+  const button=$('#save-draft');
+  if(button)button.disabled=true;
+  try{
+    // Se guardan las ediciones a mano primero: si no, el borrador guarda lo que
+    // generó el modelo y se pierde lo que la persona acaba de corregir.
+    state.proposal=await api('/api/proposal/revise',proposalEdits());
+    const saved=await api('/api/draft/save',{proposal_token:state.proposal.proposal_token,name,draft_id:state.draftId||''});
+    state.draftId=saved.draft_id;
+    showToast('Draft saved. Nothing was written to TestRail.');
+  }catch(error){showToast(error.message,true)}
+  finally{if(button)button.disabled=false}
+}
 
 const settingIds={
   testrail_url:'setting-testrail-url',testrail_email:'setting-testrail-email',testrail_project_id:'setting-project-id',
-  vision_provider:'setting-vision-provider',vision_quality:'setting-vision-quality',openai_model:'setting-openai-model',codex_model:'setting-codex-model',claude_model:'setting-claude-model',max_images:'setting-max-images',max_recording_seconds:'setting-max-recording-seconds',testrail_steps_field:'setting-steps-field',
+  vision_provider:'setting-vision-provider',vision_quality:'setting-vision-quality',openai_model:'setting-openai-model',codex_model:'setting-codex-model',claude_model:'setting-claude-model',max_images:'setting-max-images',max_recording_seconds:'setting-max-recording-seconds',capture_interval:'setting-capture-interval',hourly_rate_usd:'setting-hourly-rate',testrail_steps_field:'setting-steps-field',
   testrail_preconditions_field:'setting-preconditions-field',testrail_platform_field:'setting-platform-field',
   testrail_android_value:'setting-android-value',testrail_ios_value:'setting-ios-value',
   appium_url:'setting-appium-url',ios_bundle_id:'setting-ios-bundle-id',appium_capabilities_json:'setting-appium-capabilities',ios_devices_json:'setting-ios-devices',write_mode:'setting-write-mode'
@@ -343,7 +439,7 @@ $('#project-select').addEventListener('change',()=>{state.activeRun=null;showCas
 $('#refresh-runs').addEventListener('click',loadRuns);$('#case-search').addEventListener('input',renderTests);$('#update-case').addEventListener('click',openUpdateDialog);$('#close-dialog').addEventListener('click',closeUpdateDialog);$('#cancel-update').addEventListener('click',closeUpdateDialog);$('#continue-update').addEventListener('click',continueUpdate);$('#refresh-devices').addEventListener('click',refreshDevices);document.querySelectorAll('input[name="platform"]').forEach(input=>input.addEventListener('change',renderDevices));$('#update-dialog').addEventListener('cancel',event=>{if(state.session){event.preventDefault();showToast('Finish the journey before closing.',true)}});
 $('#history-case').addEventListener('click',openHistory);$('#close-history').addEventListener('click',()=>$('#history-dialog').close());
 $('#connect-wireless').addEventListener('click',connectWireless);
-$('#open-matrix').addEventListener('click',async()=>{$('#matrix-dialog').showModal();$('#matrix-list').innerHTML='<div class="skeleton"></div>';try{const data=await getJson('/api/device-matrix');$('#matrix-list').innerHTML=data.matrix.length?data.matrix.map(item=>`<article class="history-item"><div><strong>${escapeHtml(item.device_name||item.device_id)}</strong><p>${escapeHtml(item.platform)} · ${escapeHtml(item.version||'version not detected')} · ${item.cases.length} casos</p></div><span class="optional-badge">${new Date(item.last_tested_at*1000).toLocaleDateString()}</span></article>`).join(''):'<div class="empty"><p>The matrix appears after the first update.</p></div>'}catch(error){$('#matrix-list').innerHTML=`<div class="warnings">${escapeHtml(error.message)}</div>`}});$('#close-matrix').addEventListener('click',()=>$('#matrix-dialog').close());
+$('#open-drafts').addEventListener('click',openDraftsDialog);$('#close-drafts').addEventListener('click',()=>$('#drafts-dialog').close());$('#save-template').addEventListener('click',saveTemplate);$('#open-matrix').addEventListener('click',async()=>{$('#matrix-dialog').showModal();$('#matrix-list').innerHTML='<div class="skeleton"></div>';try{const data=await getJson('/api/device-matrix');$('#matrix-list').innerHTML=data.matrix.length?data.matrix.map(item=>`<article class="history-item"><div><strong>${escapeHtml(item.device_name||item.device_id)}</strong><p>${escapeHtml(item.platform)} · ${escapeHtml(item.version||'version not detected')} · ${item.cases.length} casos</p></div><span class="optional-badge">${new Date(item.last_tested_at*1000).toLocaleDateString()}</span></article>`).join(''):'<div class="empty"><p>The matrix appears after the first update.</p></div>'}catch(error){$('#matrix-list').innerHTML=`<div class="warnings">${escapeHtml(error.message)}</div>`}});$('#close-matrix').addEventListener('click',()=>$('#matrix-dialog').close());
 $('#appium-screen').addEventListener('pointerdown',event=>{event.preventDefault();appiumPointer=appiumPoint(event);event.currentTarget.setPointerCapture(event.pointerId)});$('#appium-screen').addEventListener('pointerup',finishAppiumGesture);$('#appium-screen').addEventListener('pointercancel',()=>{appiumPointer=null});
 $('#appium-send-text').addEventListener('click',sendAppiumText);$('#appium-text').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();sendAppiumText()}});
 $('#open-settings').addEventListener('click',openSettings);$('#close-settings').addEventListener('click',closeSettings);$('#cancel-settings').addEventListener('click',closeSettings);$('#settings-form').addEventListener('submit',saveSettings);
