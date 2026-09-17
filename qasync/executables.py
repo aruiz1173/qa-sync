@@ -88,18 +88,18 @@ def describe_untrusted(name: str) -> str:
     """Why a tool was rejected, so an unsigned binary is not reported as missing."""
     resolved = shutil.which(name)
     if not resolved:
-        return f"{name} no está instalado o no está en PATH."
+        return f"{name} is not installed or is not on PATH."
     try:
         path = Path(resolved).resolve(strict=True)
         if os.name == "nt" and path.suffix.lower() in {".exe", ".com"} and not _authenticode_valid(path):
             return (
-                f"{name} está instalado en {path} pero no tiene firma Authenticode válida. "
-                f"Si confías en ese binario, fija su hash con "
+                f"{name} is installed at {path} but has no valid Authenticode signature. "
+                f"If you trust that binary, pin its hash with "
                 f"QA_SYNC_TRUSTED_HASHES={name}={file_sha256(path)}"
             )
-        return f"{name} se resolvió a {path} pero no pasó las comprobaciones de confianza."
+        return f"{name} resolved to {path} but did not pass the trust checks."
     except OSError as exc:
-        return f"{name} no se pudo verificar: {exc}"
+        return f"{name} could not be verified: {exc}"
 
 
 def trusted_which(name: str) -> str | None:

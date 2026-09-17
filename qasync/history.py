@@ -125,16 +125,16 @@ class HistoryStore:
 
     def _path(self, backup_id: str) -> Path:
         if len(backup_id) != 32 or any(character not in "0123456789abcdef" for character in backup_id):
-            raise ValidationError("El identificador del respaldo es inválido.")
+            raise ValidationError("The backup identifier is invalid.")
         return self.root / f"{backup_id}.json"
 
     def _load(self, backup_id: str) -> dict[str, Any]:
         try:
             entry = json.loads(self._path(backup_id).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise ValidationError("El respaldo no existe o está dañado.") from exc
+            raise ValidationError("The backup does not exist or is damaged.") from exc
         if not isinstance(entry, dict) or entry.get("id") != backup_id:
-            raise ValidationError("El respaldo no es válido.")
+            raise ValidationError("The backup is not valid.")
         return entry
 
     def _write(self, backup_id: str, entry: dict[str, Any]) -> None:

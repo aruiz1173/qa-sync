@@ -18,7 +18,7 @@ class AppiumClient:
     def status(self) -> dict[str, Any]:
         response = request_json(f"{self.url}/status", timeout=3)
         if not isinstance(response, dict):
-            raise ExternalServiceError("Appium devolvió un estado inválido.")
+            raise ExternalServiceError("Appium returned an invalid status.")
         value = response.get("value") if isinstance(response.get("value"), dict) else response
         return {"ready": bool(value.get("ready", True)), "message": str(value.get("message", ""))[:300]}
 
@@ -38,11 +38,11 @@ class AppiumClient:
             timeout=120,
         )
         if not isinstance(response, dict):
-            raise ExternalServiceError("Appium devolvió una sesión inválida.")
+            raise ExternalServiceError("Appium returned an invalid session.")
         value = response.get("value") if isinstance(response.get("value"), dict) else {}
         session_id = str(response.get("sessionId") or value.get("sessionId") or "")
         if not session_id:
-            raise ExternalServiceError("Appium no devolvió sessionId. Revisa WebDriverAgent y el bundle ID.")
+            raise ExternalServiceError("Appium returned no sessionId. Check WebDriverAgent and the bundle ID.")
         return session_id
 
     def screenshot(self, session_id: str) -> bytes:
@@ -51,7 +51,7 @@ class AppiumClient:
         try:
             return base64.b64decode(str(value), validate=True)
         except ValueError as exc:
-            raise ExternalServiceError("Appium devolvió una captura inválida.") from exc
+            raise ExternalServiceError("Appium returned an invalid screenshot.") from exc
 
     def source(self, session_id: str) -> str:
         response = request_json(f"{self.url}/session/{session_id}/source", timeout=30)
@@ -61,10 +61,10 @@ class AppiumClient:
         response = request_json(f"{self.url}/session/{session_id}/window/rect", timeout=30)
         value = response.get("value") if isinstance(response, dict) else None
         if not isinstance(value, dict):
-            raise ExternalServiceError("Appium no devolvió el tamaño de la pantalla.")
+            raise ExternalServiceError("Appium returned no screen size.")
         width, height = value.get("width"), value.get("height")
         if not isinstance(width, int) or not isinstance(height, int) or width <= 0 or height <= 0:
-            raise ExternalServiceError("Appium devolvió dimensiones inválidas.")
+            raise ExternalServiceError("Appium returned invalid dimensions.")
         return width, height
 
     def action(

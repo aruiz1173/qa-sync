@@ -17,17 +17,17 @@ class EvidenceCipher:
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         except ImportError as exc:
             raise ConfigurationError(
-                "Falta la dependencia cryptography; instálala para guardar evidencia cifrada."
+                "The cryptography dependency is missing; install it to store encrypted evidence."
             ) from exc
         if encoded_key:
             try:
                 key = base64.urlsafe_b64decode(encoded_key.encode("ascii"))
             except (ValueError, UnicodeEncodeError, binascii.Error) as exc:
-                raise ConfigurationError("La clave local de evidencia no es válida.") from exc
+                raise ConfigurationError("The local evidence key is not valid.") from exc
         else:
             key = os.urandom(32)
         if len(key) != 32:
-            raise ConfigurationError("La clave local de evidencia debe tener 256 bits.")
+            raise ConfigurationError("The local evidence key must be 256 bits.")
         self._cipher = AESGCM(key)
 
     def encrypt(self, plaintext: bytes) -> bytes:
@@ -36,9 +36,9 @@ class EvidenceCipher:
 
     def decrypt(self, payload: bytes) -> bytes:
         if not payload.startswith(MAGIC) or len(payload) < len(MAGIC) + 12 + 16:
-            raise ValidationError("Una captura cifrada está dañada o no es válida.")
+            raise ValidationError("An encrypted capture is damaged or invalid.")
         nonce = payload[len(MAGIC):len(MAGIC) + 12]
         try:
             return self._cipher.decrypt(nonce, payload[len(MAGIC) + 12:], MAGIC)
         except Exception as exc:
-            raise ValidationError("No se pudo autenticar una captura cifrada.") from exc
+            raise ValidationError("An encrypted capture failed authentication.") from exc

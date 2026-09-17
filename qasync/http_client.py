@@ -43,7 +43,7 @@ def request_json(
             with urllib.request.build_opener(_NoRedirect).open(req, timeout=timeout) as response:
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
             if len(raw) > MAX_RESPONSE_BYTES:
-                raise ExternalServiceError("El servicio externo devolvió una respuesta demasiado grande.")
+                raise ExternalServiceError("The external service returned a response that is too large.")
             break
         except urllib.error.HTTPError as exc:
             detail = exc.read(4096).decode("utf-8", errors="replace")
@@ -67,19 +67,19 @@ def request_json(
                     time.sleep(delay)
                     continue
             raise ExternalServiceError(
-                f"El servicio externo respondió HTTP {exc.code}: {detail}"
+                f"The external service answered HTTP {exc.code}: {detail}"
             ) from exc
         except urllib.error.URLError as exc:
             if attempt + 1 < attempts:
                 time.sleep(0.4 * (2 ** attempt))
                 continue
-            raise ExternalServiceError(f"No se pudo conectar al servicio externo: {exc.reason}") from exc
+            raise ExternalServiceError(f"Could not reach the external service: {exc.reason}") from exc
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ExternalServiceError("El servicio externo devolvió una respuesta no válida.") from exc
+        raise ExternalServiceError("The external service returned an invalid response.") from exc
     if isinstance(parsed, list) and allow_list:
         return parsed
     if not isinstance(parsed, dict):
-        raise ExternalServiceError("El servicio externo devolvió un formato inesperado.")
+        raise ExternalServiceError("The external service returned an unexpected format.")
     return parsed

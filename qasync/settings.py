@@ -54,12 +54,12 @@ def _validated_service_url(raw: object, label: str, example: str) -> str:
     parsed = urlparse(url)
     is_local = parsed.hostname in LOOPBACK_HOSTNAMES
     if parsed.scheme != "https" and not (is_local and parsed.scheme == "http"):
-        raise ValidationError(f"{label} debe usar HTTPS; HTTP solo se permite en localhost.")
+        raise ValidationError(f"{label} must use HTTPS; HTTP is only allowed on localhost.")
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         # Lo que se tiene a mano es la URL de un run, no la de la instancia: el mensaje
         # dice qué pegar en vez de sólo qué está mal.
         raise ValidationError(
-            f"Pega solo la dirección de {label}, sin credenciales, query ni fragmento. "
+            f"Paste only the address of {label}, sin credenciales, query ni fragmento. "
             f"Por ejemplo: {example}"
         )
     return url
@@ -123,7 +123,7 @@ class SettingsManager:
         result.update({
             "openai_api_key_set": bool(config.openai_api_key),
             "testrail_api_key_set": bool(config.testrail_api_key),
-            "secret_storage": "macOS Keychain" if self.uses_keychain else "Windows DPAPI (usuario actual)" if self.uses_dpapi else "archivo local con permisos 0600",
+            "secret_storage": "macOS Keychain" if self.uses_keychain else "Windows DPAPI (current user)" if self.uses_dpapi else "local file with 0600 permissions",
             "settings_file": str(self.path),
         })
         return result
@@ -153,7 +153,7 @@ class SettingsManager:
         self._validate(saved)
         values.update(saved)
         if not values.get("vision_provider"):
-            raise ValidationError("Elige Codex, Claude u OpenAI API como proveedor de visión.")
+            raise ValidationError("Pick Codex, Claude or the OpenAI API as the vision provider.")
         self._write(self.path, saved)
 
         fallback = self._read(self.fallback_secrets_path)
@@ -187,7 +187,7 @@ class SettingsManager:
     def save_profile(self, name: str, current: Config) -> dict[str, Any]:
         clean_name = name.strip()
         if not 1 <= len(clean_name) <= 80 or not re.fullmatch(r"[\w .()/-]+", clean_name, re.UNICODE):
-            raise ValidationError("El nombre del perfil contiene caracteres no permitidos.")
+            raise ValidationError("The profile name contains characters that are not allowed.")
         raw = self._read(self.profiles_path)
         profiles = raw.get("profiles") if isinstance(raw.get("profiles"), dict) else {}
         values = asdict(current)
@@ -200,14 +200,14 @@ class SettingsManager:
         profiles = raw.get("profiles") if isinstance(raw.get("profiles"), dict) else {}
         profile = profiles.get(name)
         if not isinstance(profile, dict):
-            raise ValidationError("El perfil no existe.")
+            raise ValidationError("That profile does not exist.")
         return self.save(profile, current)
 
     def delete_profile(self, name: str) -> dict[str, Any]:
         raw = self._read(self.profiles_path)
         profiles = raw.get("profiles") if isinstance(raw.get("profiles"), dict) else {}
         if name not in profiles:
-            raise ValidationError("El perfil no existe.")
+            raise ValidationError("That profile does not exist.")
         del profiles[name]
         self._write(self.profiles_path, {"version": 1, "profiles": profiles})
         return self.profiles()
@@ -217,9 +217,9 @@ class SettingsManager:
         try:
             parsed = int(value)
         except (TypeError, ValueError) as exc:
-            raise ValidationError("El límite de pantallas debe ser un número.") from exc
+            raise ValidationError("The screen limit must be a number.") from exc
         if not 2 <= parsed <= 30:
-            raise ValidationError("El límite de pantallas debe estar entre 2 y 30.")
+            raise ValidationError("The screen limit must be between 2 and 30.")
         return parsed
 
     @staticmethod
@@ -241,9 +241,9 @@ class SettingsManager:
         try:
             parsed = float(value)
         except (TypeError, ValueError) as exc:
-            raise ValidationError("El intervalo de captura debe ser un número.") from exc
+            raise ValidationError("The capture interval must be a number.") from exc
         if not 0.5 <= parsed <= 10:
-            raise ValidationError("El intervalo de captura debe estar entre 0.5 y 10 segundos.")
+            raise ValidationError("The capture interval must be between 0.5 and 10 seconds.")
         return round(parsed, 2)
 
     @staticmethod
@@ -251,9 +251,9 @@ class SettingsManager:
         try:
             parsed = int(value)
         except (TypeError, ValueError) as exc:
-            raise ValidationError("La duración máxima debe ser un número.") from exc
+            raise ValidationError("The maximum duration must be a number.") from exc
         if not 60 <= parsed <= 3600:
-            raise ValidationError("La duración máxima debe estar entre 60 y 3600 segundos.")
+            raise ValidationError("The maximum duration must be between 60 and 3600 seconds.")
         return parsed
 
     @staticmethod
@@ -266,16 +266,16 @@ class SettingsManager:
         )
         bundle_id = str(values.get("ios_bundle_id", "")).strip()
         if bool(appium_url) != bool(bundle_id):
-            raise ValidationError("Configura juntos la URL de Appium y el bundle ID de iOS.")
+            raise ValidationError("Set the Appium URL and the iOS bundle ID together.")
         if bundle_id and not re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", bundle_id):
-            raise ValidationError("El bundle ID de iOS no tiene un formato válido.")
+            raise ValidationError("The iOS bundle ID is not valid.")
         capabilities_text = str(values.get("appium_capabilities_json", "{}") or "{}").strip()
         if len(capabilities_text) > 10000:
-            raise ValidationError("Las capabilities de Appium son demasiado grandes.")
+            raise ValidationError("The Appium capabilities are too large.")
         try:
             capabilities = json.loads(capabilities_text)
         except json.JSONDecodeError as exc:
-            raise ValidationError("Las capabilities de Appium deben ser JSON válido.") from exc
+            raise ValidationError("The Appium capabilities must be valid JSON.") from exc
         if not isinstance(capabilities, dict) or any(
             not isinstance(key, str) or not key.startswith("appium:") for key in capabilities
         ):
@@ -292,7 +292,7 @@ class SettingsManager:
         try:
             ios_devices = json.loads(ios_devices_text)
         except json.JSONDecodeError as exc:
-            raise ValidationError("Los dispositivos iOS remotos deben ser JSON válido.") from exc
+            raise ValidationError("The remote iOS devices must be valid JSON.") from exc
         if not isinstance(ios_devices, list) or len(ios_devices) > 100 or any(
             not isinstance(item, dict)
             or not isinstance(item.get("id"), str) or not 1 <= len(item["id"]) <= 200
@@ -310,23 +310,23 @@ class SettingsManager:
         values["write_mode"] = write_mode
         provider = str(values.get("vision_provider", "")).strip().lower()
         if provider not in {"", "codex", "claude", "openai_api"}:
-            raise ValidationError("El proveedor de visión no es válido.")
+            raise ValidationError("That vision provider is not valid.")
         values["vision_provider"] = provider
         fallback = str(values.get("fallback_provider", "")).strip().lower()
         enabled = values.get("allow_provider_fallback") is True or str(values.get("allow_provider_fallback", "")).lower() == "true"
         if fallback not in {"", "codex", "claude"}:
             raise ValidationError("El proveedor alterno debe ser Codex o Claude.")
         if enabled and (provider not in {"codex", "claude"} or fallback not in {"codex", "claude"} or fallback == provider):
-            raise ValidationError("El cambio automático requiere Codex y Claude como proveedores distintos.")
+            raise ValidationError("Automatic switching needs Codex and Claude as two different providers.")
         values["allow_provider_fallback"] = enabled
         values["fallback_provider"] = fallback
         quality = str(values.get("vision_quality", "high")).strip().lower()
         if quality not in {"economical", "high", "maximum"}:
-            raise ValidationError("La calidad de visión debe ser economical, high o maximum.")
+            raise ValidationError("Vision quality must be economical, high or maximum.")
         values["vision_quality"] = quality
         for field in ("testrail_steps_field", "testrail_preconditions_field"):
             if not str(values.get(field, "")).startswith("custom_"):
-                raise ValidationError(f"{field} debe comenzar con custom_.")
+                raise ValidationError(f"{field} must start with custom_.")
 
     @staticmethod
     def _read(path: Path) -> dict[str, Any]:
@@ -363,7 +363,7 @@ class SettingsManager:
             check=False,
         )
         if result.returncode:
-            raise ValidationError("No se pudo guardar una credencial en macOS Keychain.")
+            raise ValidationError("A credential could not be stored in the macOS Keychain.")
 
     @staticmethod
     def _powershell() -> str:
@@ -398,9 +398,9 @@ class SettingsManager:
                 value,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
-            raise ValidationError("Windows no pudo ejecutar DPAPI mediante PowerShell.") from exc
+            raise ValidationError("Windows could not run DPAPI through PowerShell.") from exc
         if result.returncode or not (result.stdout or "").strip():
-            raise ValidationError("Windows no pudo proteger una credencial con DPAPI.")
+            raise ValidationError("Windows could not protect a credential with DPAPI.")
         return result.stdout.strip()
 
     @classmethod

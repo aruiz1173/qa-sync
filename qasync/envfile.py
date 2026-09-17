@@ -16,19 +16,19 @@ def load_dotenv(path: Path) -> None:
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError as exc:
-        raise ConfigurationError("No se pudo leer el archivo .env.") from exc
+        raise ConfigurationError("The .env file could not be read.") from exc
     for number, raw in enumerate(lines, 1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         if "=" not in line:
-            raise ConfigurationError(f"Línea {number} inválida en .env.")
+            raise ConfigurationError(f"Line {number} in .env is invalid.")
         name, value = line.split("=", 1)
         name, value = name.strip(), value.strip()
         if not NAME.fullmatch(name):
-            raise ConfigurationError(f"Variable inválida en la línea {number} de .env.")
+            raise ConfigurationError(f"Invalid variable on line {number} of .env.")
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
         if "\x00" in value or len(value) > 20000:
-            raise ConfigurationError(f"Valor inválido en la línea {number} de .env.")
+            raise ConfigurationError(f"Invalid value on line {number} of .env.")
         os.environ[name] = value

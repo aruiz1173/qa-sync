@@ -60,7 +60,7 @@ class ProposalStore:
             self._purge()
             proposal = self._items.get(token)
         if proposal is None:
-            raise ValidationError("La propuesta expiró o ya fue utilizada. Analiza de nuevo.")
+            raise ValidationError("That proposal expired or was already used. Analyse again.")
         return copy.deepcopy(proposal)
 
     def update(self, token: str, changes: dict[str, Any]) -> Proposal:
@@ -68,7 +68,7 @@ class ProposalStore:
             self._purge()
             proposal = self._items.get(token)
             if proposal is None:
-                raise ValidationError("La propuesta expiró o ya fue utilizada. Analiza de nuevo.")
+                raise ValidationError("That proposal expired or was already used. Analyse again.")
             proposal.changes = copy.deepcopy(changes)
             self._save()
             return copy.deepcopy(proposal)
@@ -79,7 +79,7 @@ class ProposalStore:
             proposal = self._items.pop(token, None)
             self._save()
         if proposal is None:
-            raise ValidationError("La propuesta expiró o ya fue utilizada. Analiza de nuevo.")
+            raise ValidationError("That proposal expired or was already used. Analyse again.")
         return proposal
 
     def _purge(self) -> None:
@@ -257,7 +257,7 @@ class QASyncService:
         })
         return {
             "providers": providers,
-            "usage_note": "Los proveedores no exponen aquí un porcentaje restante verificable; QA Sync muestra disponible/no disponible y nunca inventa el saldo.",
+            "usage_note": "Providers do not expose a verifiable remaining percentage here; QA Sync shows available or not and never invents a balance.",
             "fallback_authorized": self.config.allow_provider_fallback,
             "fallback_provider": self.config.fallback_provider,
         }
@@ -274,23 +274,23 @@ class QASyncService:
 
     def validate_configuration(self) -> dict[str, Any]:
         if not self.config.testrail_ready:
-            raise ConfigurationError("Configura TestRail antes de validar los campos.")
+            raise ConfigurationError("Set up TestRail before validating the fields.")
         result = TestRailClient(self.config).validate_configuration()
         provider = self.config.vision_provider
         result["vision"] = {"provider": provider, "ready": False}
         if not provider:
-            result["errors"].append("Elige Codex, Claude u OpenAI API como proveedor de visión.")
+            result["errors"].append("Pick Codex, Claude or the OpenAI API as the vision provider.")
         elif provider == "openai_api":
             result["vision"] = {"provider": provider, "ready": bool(self.config.openai_api_key)}
             if not self.config.openai_api_key:
-                result["errors"].append("Falta la API key de OpenAI para el proveedor seleccionado.")
+                result["errors"].append("The OpenAI API key is missing for the selected provider.")
         else:
             status = VisionAnalyzer.provider_status(provider)
             result["vision"] = {**status, "ready": status["installed"] and status["authenticated"]}
             if not status["installed"]:
-                result["errors"].append(f"{provider.title()} CLI no está instalado.")
+                result["errors"].append(f"{provider.title()} CLI is not installed.")
             elif not status["authenticated"]:
-                result["errors"].append(f"Inicia sesión en {provider.title()} CLI y vuelve a validar.")
+                result["errors"].append(f"Sign in to {provider.title()} CLI and validate again.")
         result["appium"] = {"configured": self.config.appium_ready, "ready": False}
         if self.config.appium_ready:
             try:
@@ -301,9 +301,9 @@ class QASyncService:
                 ).status()
                 result["appium"] = {"configured": True, **status}
                 if not status["ready"]:
-                    result["warnings"].append("Appium está conectado pero no está listo.")
+                    result["warnings"].append("Appium is connected but not ready.")
             except ExternalServiceError as exc:
-                result["warnings"].append(f"Appium no está disponible todavía: {exc}")
+                result["warnings"].append(f"Appium is not available yet: {exc}")
         result["valid"] = not result["errors"]
         return result
 
@@ -433,7 +433,7 @@ class QASyncService:
         result = self.analyze({
             "case_id": request.get("case_id"),
             "platform": platform,
-            "context": f"{context}\n\nMetadatos de la sesión:\n{observations}".strip()[:12000],
+            "context": f"{context}\n\nSession metadata:\n{observations}".strip()[:12000],
             "images": images,
             "device_id": session.get("device_id", ""),
             "device_name": environment.get("model") or device.get("name", ""),
@@ -481,7 +481,7 @@ class QASyncService:
 
     def analyze(self, request: dict[str, Any]) -> dict[str, Any]:
         if not self.config.testrail_ready:
-            raise ConfigurationError("Configura TestRail antes de analizar un caso existente.")
+            raise ConfigurationError("Set up TestRail before analysing an existing case.")
         case_id = normalize_case_id(request.get("case_id"))
         platform = str(request.get("platform", "")).lower()
         client = TestRailClient(self.config)
@@ -568,25 +568,25 @@ class QASyncService:
         preconditions = request.get("preconditions")
         steps = request.get("steps")
         if not isinstance(title, str) or not title.strip() or len(title) > 250:
-            raise ValidationError("El título debe contener entre 1 y 250 caracteres.")
+            raise ValidationError("The title must be 1 to 250 characters.")
         if not isinstance(preconditions, str) or len(preconditions) > 10000:
-            raise ValidationError("Las precondiciones superan el límite permitido.")
+            raise ValidationError("The preconditions are over the allowed limit.")
         if not isinstance(steps, list) or not 1 <= len(steps) <= 100:
-            raise ValidationError("La propuesta debe tener entre 1 y 100 pasos.")
+            raise ValidationError("The proposal must have 1 to 100 steps.")
         cleaned_steps = []
         for index, step in enumerate(steps, 1):
             if not isinstance(step, dict):
-                raise ValidationError(f"El paso {index} debe ser un objeto.")
+                raise ValidationError(f"Step {index} must be an object.")
             content, expected = step.get("content"), step.get("expected")
             if not isinstance(content, str) or not content.strip() or len(content) > 5000:
-                raise ValidationError(f"La acción del paso {index} debe tener entre 1 y 5000 caracteres.")
+                raise ValidationError(f"The action of step {index} must be 1 to 5000 characters.")
             # Un paso sin resultado esperado no se puede verificar. El esquema del
             # modelo ya lo exige; editar a mano tampoco debería poder saltárselo,
             # y antes sólo se comprobaba el tipo y el largo máximo.
             if not isinstance(expected, str) or not expected.strip():
-                raise ValidationError(f"El paso {index} necesita un resultado esperado.")
+                raise ValidationError(f"Step {index} needs an expected result.")
             if len(expected) > 5000:
-                raise ValidationError(f"El resultado esperado del paso {index} supera los 5000 caracteres.")
+                raise ValidationError(f"The expected result of step {index} is longer than 5000 characters.")
             cleaned_steps.append({"content": content.strip(), "expected": expected.strip()})
         changes = copy.deepcopy(proposal.changes)
         changes["title"] = title.strip()
@@ -631,24 +631,24 @@ class QASyncService:
 
     def apply(self, request: dict[str, Any]) -> dict[str, Any]:
         if self.config.write_mode == "review_only":
-            raise ValidationError("QA Sync está en modo simulación; no se escribió nada en TestRail.")
+            raise ValidationError("QA Sync is in dry run mode; nothing was written to TestRail.")
         token = str(request.get("proposal_token", ""))
         if not token:
-            raise ValidationError("Falta el token de la propuesta.")
+            raise ValidationError("The proposal token is missing.")
         proposal = self.store.pop(token)
         expected = f"ACTUALIZAR C{proposal.case_id}"
         if request.get("confirmation") != expected:
             # El token es de un solo uso incluso al fallar: obliga a revisar de nuevo.
-            raise ValidationError(f"Escribe exactamente: {expected}")
+            raise ValidationError(f"Type exactly: {expected}")
         optional_steps = request.get("optional_steps", [])
         if not isinstance(optional_steps, list) or any(
             isinstance(index, bool) or not isinstance(index, int) for index in optional_steps
         ):
-            raise ValidationError("La selección de pasos opcionales es inválida.")
+            raise ValidationError("The optional step selection is invalid.")
         changes = copy.deepcopy(proposal.changes)
         steps = changes.get(self.config.testrail_steps_field, [])
         if not isinstance(steps, list) or any(index < 0 or index >= len(steps) for index in optional_steps):
-            raise ValidationError("Uno de los pasos opcionales no existe en la propuesta.")
+            raise ValidationError("Uno de los pasos opcionales does not exist in la propuesta.")
         for index in set(optional_steps):
             step = steps[index]
             content = str(step.get("content", ""))
@@ -659,7 +659,7 @@ class QASyncService:
         stale_fields = [key for key in changes if latest.get(key) != proposal.current.get(key)]
         if stale_fields:
             raise ValidationError(
-                "El caso cambió en TestRail después del análisis. Recárgalo antes de actualizar: "
+                "The case changed in TestRail after the analysis. Reload it before updating: "
                 + ", ".join(sorted(stale_fields))
             )
         previous_fields = {key: latest.get(key) for key in changes}
@@ -781,14 +781,14 @@ class QASyncService:
         entry = self.history.get(backup_id)
         case_id = normalize_case_id(entry.get("case_id"))
         if request.get("confirmation") != f"RESTAURAR C{case_id}":
-            raise ValidationError(f"Escribe exactamente: RESTAURAR C{case_id}")
+            raise ValidationError(f"Type exactly: RESTAURAR C{case_id}")
         if entry.get("state") == "rolled_back":
             return {"restored": True, "case_id": case_id, "already_restored": True}
 
         previous = entry.get("previous_fields")
         proposed = entry.get("applied_fields") or entry.get("proposed_fields")
         if not isinstance(previous, dict) or not isinstance(proposed, dict):
-            raise ValidationError("El respaldo no contiene campos válidos.")
+            raise ValidationError("The backup holds no valid fields.")
         client = TestRailClient(self.config)
         current = client.get_case(case_id)
         conflicts = [key for key, value in proposed.items() if current.get(key) != value]
@@ -798,7 +798,7 @@ class QASyncService:
                 self.history.mark_rolled_back(backup_id)
                 return {"restored": True, "case_id": case_id, "already_restored": True}
             raise ValidationError(
-                "El caso cambió después de esta actualización; no se restauró para evitar sobrescribir trabajo nuevo."
+                "The case changed after this update; it was not restored, to avoid overwriting newer work."
             )
         restored = client.update_case(case_id, previous)
         self.history.mark_rolled_back(backup_id)

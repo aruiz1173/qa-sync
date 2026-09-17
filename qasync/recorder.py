@@ -35,7 +35,7 @@ def _run(command: list[str], timeout: float = 12) -> subprocess.CompletedProcess
     try:
         return subprocess.run(command, capture_output=True, check=False, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise ExternalServiceError(f"No se pudo ejecutar {command[0]}: {exc}") from exc
+        raise ExternalServiceError(f"Could not run {command[0]}: {exc}") from exc
 
 
 @dataclass
@@ -181,18 +181,18 @@ class RecorderManager:
                         continue
                     serial, state = parts[0][:200], parts[1].lower()
                     if state == "unauthorized":
-                        android_unavailable.append({"id": serial, "name": serial, "kind": "sin autorizar"})
-                        errors.append(f"Android {serial}: autoriza la clave de depuración USB en el dispositivo.")
+                        android_unavailable.append({"id": serial, "name": serial, "kind": "unauthorised"})
+                        errors.append(f"Android {serial}: authorise the USB debugging key on the device.")
                     elif state == "offline":
                         android_unavailable.append({"id": serial, "name": serial, "kind": "offline"})
-                        errors.append(f"Android {serial}: está offline; reconecta USB o Wireless Debugging.")
+                        errors.append(f"Android {serial}: it is offline; reconnect USB or Wireless Debugging.")
                     else:
                         android_unavailable.append({"id": serial, "name": serial, "kind": state[:40]})
-                        errors.append(f"Android {serial}: ADB reporta estado {state[:40]}.")
+                        errors.append(f"Android {serial}: ADB reports state {state[:40]}.")
             else:
-                errors.append("Android: ADB no pudo listar dispositivos.")
+                errors.append("Android: ADB could not list devices.")
         else:
-            errors.append("Android: ADB no está instalado o no está disponible desde una ruta confiable.")
+            errors.append("Android: ADB is not installed, or not reachable from a trusted path.")
         if android and not caps["scrcpy"]:
             # Un scrcpy presente pero rechazado no es "no instalado": el diagnóstico
             # dice el motivo y, si es la firma, el hash que hay que fijar.
@@ -204,7 +204,7 @@ class RecorderManager:
                 known = {item["id"] for item in ios}
                 ios.extend(item for item in local_ios if item["id"] not in known)
             else:
-                errors.append("iOS: Xcode no pudo listar simuladores activos.")
+                errors.append("iOS: Xcode could not list booted simulators.")
             if self.appium:
                 try:
                     physical = _run([xcrun, "xctrace", "list", "devices"])
@@ -214,9 +214,9 @@ class RecorderManager:
                             physical.stdout.decode(errors="replace")
                         ) if item["id"] not in known)
                 except ExternalServiceError:
-                    errors.append("iOS: Xcode no pudo listar dispositivos iOS físicos.")
+                    errors.append("iOS: Xcode could not list physical iOS devices.")
         elif not ios:
-            errors.append("iOS: Xcode/simctl no está disponible y no hay dispositivos Appium remotos configurados.")
+            errors.append("iOS: Xcode/simctl is unavailable and no remote Appium devices are configured.")
         return {
             "android": android, "android_unavailable": android_unavailable,
             "ios": ios, "capabilities": caps, "errors": errors,
@@ -249,7 +249,7 @@ class RecorderManager:
     def open_device(self, platform: str, device_id: str) -> None:
         if platform == "android":
             if device_id not in {item["id"] for item in self.list_devices()["android"]}:
-                raise ValidationError("El dispositivo Android no está conectado o autorizado en ADB.")
+                raise ValidationError("That Android device is not connected or not authorised in ADB.")
             executable = trusted_which("scrcpy")
             if not executable:
                 raise ValidationError(describe_untrusted("scrcpy"))
@@ -266,15 +266,15 @@ class RecorderManager:
             executable = trusted_which("open") or "/usr/bin/open"
             command = [executable, "-a", "Simulator"]
         else:
-            raise ValidationError("Plataforma desconocida.")
+            raise ValidationError("Unknown platform.")
         try:
             process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except OSError as exc:
-            raise ExternalServiceError(f"No se pudo abrir el dispositivo: {exc}") from exc
+            raise ExternalServiceError(f"The device could not be opened: {exc}") from exc
         if platform == "android":
             time.sleep(0.35)
             if process.poll() is not None:
-                raise ExternalServiceError("scrcpy se cerró al iniciar. Revisa la autorización ADB y vuelve a intentar.")
+                raise ExternalServiceError("scrcpy closed while starting. Check the ADB authorisation and try again.")
             with self._mirror_lock:
                 self._scrcpy_processes[device_id] = process
 
@@ -287,21 +287,21 @@ class RecorderManager:
             address = ipaddress.ip_address(str(host).strip())
             endpoint_port = int(str(port).strip())
         except ValueError as exc:
-            raise ValidationError("Usa una dirección IP y puerto válidos para Wireless Debugging.") from exc
+            raise ValidationError("Use a valid IP address and port for Wireless Debugging.") from exc
         if not (address.is_private or address.is_loopback) or not 1 <= endpoint_port <= 65535:
-            raise ValidationError("Wireless Debugging sólo permite una IP privada/local y un puerto válido.")
+            raise ValidationError("Wireless Debugging only allows a private or local IP and a valid port.")
         executable = trusted_which("adb")
         if not executable:
-            raise ValidationError("ADB no está instalado o no está disponible desde una ruta confiable.")
+            raise ValidationError("ADB is not installed, or not reachable from a trusted path.")
         endpoint = f"{address.compressed}:{endpoint_port}"
         code = str(pairing_code).strip()
         if code:
             if not re.fullmatch(r"\d{6}", code):
-                raise ValidationError("El código de emparejamiento Android debe tener 6 dígitos.")
+                raise ValidationError("The Android pairing code must be 6 digits.")
             result = _run([executable, "pair", endpoint, code], timeout=20)
             ok, detail = adb_endpoint_result((result.stdout + result.stderr).decode(errors="replace"))
             if result.returncode or not ok:
-                raise ExternalServiceError(f"ADB no pudo emparejar el dispositivo: {detail[:300]}")
+                raise ExternalServiceError(f"ADB could not pair the device: {detail[:300]}")
             # En Android 11+ el diálogo de emparejamiento publica un puerto distinto al
             # de depuración: conectarse al de emparejamiento falla siempre. Se resuelve
             # el de conexión por mDNS para el mismo host.
@@ -311,7 +311,7 @@ class RecorderManager:
         # salida por sí solo daba por conectado un dispositivo que nunca respondió.
         ok, detail = adb_endpoint_result((result.stdout + result.stderr).decode(errors="replace"))
         if result.returncode or not ok:
-            raise ExternalServiceError(f"ADB no pudo conectarse al dispositivo inalámbrico: {detail[:300]}")
+            raise ExternalServiceError(f"ADB could not connect to the wireless device: {detail[:300]}")
         self.invalidate_devices()
         return {"endpoint": endpoint, "paired": bool(code), "connected": True, "detail": detail[:300]}
 
@@ -324,18 +324,18 @@ class RecorderManager:
         """
         serial = str(device_id or "").strip()
         if not serial or len(serial) > 200 or any(ord(character) < 32 for character in serial):
-            raise ValidationError("Selecciona el dispositivo USB que quieres pasar a Wi-Fi.")
+            raise ValidationError("Select the USB device you want to switch to Wi-Fi.")
         try:
             tcp_port = int(str(port).strip() or 5555)
         except ValueError as exc:
-            raise ValidationError("El puerto debe ser un número.") from exc
+            raise ValidationError("The port must be a number.") from exc
         if not 1024 <= tcp_port <= 65535:
-            raise ValidationError("Usa un puerto entre 1024 y 65535.")
+            raise ValidationError("Use a port between 1024 and 65535.")
         if serial not in {item["id"] for item in self.list_devices()["android"]}:
-            raise ValidationError("Ese dispositivo no está conectado por ADB. Revisa el cable y la autorización.")
+            raise ValidationError("That device is not connected over ADB. Check the cable and the authorisation.")
         executable = trusted_which("adb")
         if not executable:
-            raise ValidationError("ADB no está instalado o no está disponible desde una ruta confiable.")
+            raise ValidationError("ADB is not installed, or not reachable from a trusted path.")
         # La IP se lee antes de reiniciar adbd: después el serial USB puede tardar
         # en volver y quedaríamos sin saber a dónde conectarnos.
         address = ""
@@ -346,12 +346,12 @@ class RecorderManager:
                 break
         if not address:
             raise ExternalServiceError(
-                "No se pudo leer la IP Wi-Fi del dispositivo. Conéctalo a la misma red Wi-Fi y reintenta."
+                "The device Wi-Fi address could not be read. Put it on the same Wi-Fi network and retry."
             )
         result = _run([executable, "-s", serial, "tcpip", str(tcp_port)], timeout=20)
         output = (result.stdout + result.stderr).decode(errors="replace")
         if result.returncode or not parse_adb_tcpip_result(output):
-            raise ExternalServiceError(f"ADB no pudo poner el dispositivo en modo TCP: {' '.join(output.split())[:300]}")
+            raise ExternalServiceError(f"ADB could not put the device in TCP mode: {' '.join(output.split())[:300]}")
         # adbd se reinicia: el puerto tarda un momento en aceptar conexiones.
         endpoint = f"{address}:{tcp_port}"
         last = ""
@@ -363,7 +363,7 @@ class RecorderManager:
                 self.invalidate_devices()
                 return {"endpoint": endpoint, "connected": True, "detail": last[:300]}
         raise ExternalServiceError(
-            f"El dispositivo quedó en modo TCP en {endpoint} pero no aceptó la conexión: {last[:300]}"
+            f"The device is in TCP mode at {endpoint} but did not accept the connection: {last[:300]}"
         )
 
     def _hardware_serial(self, device_id: str) -> str:
@@ -435,10 +435,10 @@ class RecorderManager:
     def disconnect_android_wireless(self, endpoint: object) -> dict[str, Any]:
         text = str(endpoint or "").strip()
         if not re.fullmatch(r"[0-9A-Fa-f.:\[\]]{3,60}:\d{1,5}", text):
-            raise ValidationError("Indica el endpoint como IP:puerto para desconectarlo.")
+            raise ValidationError("Give the endpoint as IP:port to disconnect it.")
         executable = trusted_which("adb")
         if not executable:
-            raise ValidationError("ADB no está instalado o no está disponible desde una ruta confiable.")
+            raise ValidationError("ADB is not installed, or not reachable from a trusted path.")
         self._close_scrcpy(text)
         result = _run([executable, "disconnect", text], timeout=20)
         detail = " ".join((result.stdout + result.stderr).decode(errors="replace").split())
@@ -449,14 +449,14 @@ class RecorderManager:
         """Devices advertising Wireless Debugging, so the IP and port need not be typed."""
         executable = trusted_which("adb")
         if not executable:
-            raise ValidationError("ADB no está instalado o no está disponible desde una ruta confiable.")
+            raise ValidationError("ADB is not installed, or not reachable from a trusted path.")
         try:
             result = _run([executable, "mdns", "services"], timeout=15)
         except ExternalServiceError as exc:
-            raise ExternalServiceError(f"ADB no pudo buscar dispositivos por mDNS: {exc}") from exc
+            raise ExternalServiceError(f"ADB could not search for devices over mDNS: {exc}") from exc
         output = (result.stdout + result.stderr).decode(errors="replace")
         if result.returncode:
-            raise ExternalServiceError("ADB no pudo buscar dispositivos por mDNS. Revisa que el daemon esté activo.")
+            raise ExternalServiceError("ADB could not search for devices over mDNS. Check that the daemon is running.")
         return {"services": parse_adb_mdns_services(output)}
 
     def invalidate_devices(self) -> None:
@@ -472,12 +472,12 @@ class RecorderManager:
     ) -> dict[str, Any]:
         self._cleanup_expired()
         if platform not in {"android", "ios"} or not device_id.strip():
-            raise ValidationError("Selecciona un dispositivo Android o iOS.")
+            raise ValidationError("Select an Android or iOS device.")
         if len(device_id) > 200 or any(ord(character) < 32 for character in device_id):
-            raise ValidationError("El identificador del dispositivo es inválido.")
+            raise ValidationError("The device identifier is invalid.")
         known = {d["id"] for d in self.list_devices()[platform]}
         if device_id not in known:
-            raise ValidationError("El dispositivo ya no está disponible. Actualiza la lista.")
+            raise ValidationError("That device is no longer available. Refresh the list.")
         if platform == "android":
             self._prepare_android(device_id, preparation or {})
         # Se compara el serial físico, no el device_id: el mismo aparato por USB y por
@@ -489,7 +489,7 @@ class RecorderManager:
                 for item in self._sessions.values()
             ):
                 raise ValidationError(
-                    "Ese dispositivo ya tiene una grabación activa, por USB o por Wi-Fi."
+                    "That device already has a recording running, over USB or over Wi-Fi."
                 )
         session_id = uuid.uuid4().hex
         if self.recovery_dir:
@@ -517,7 +517,7 @@ class RecorderManager:
         if session.environment:
             self._append_observation(
                 session,
-                "Entorno de prueba: " + "; ".join(
+                "Test environment: " + "; ".join(
                     f"{key}={value}" for key, value in session.environment.items() if value
                 )[:1200],
             )
@@ -532,7 +532,7 @@ class RecorderManager:
             try:
                 self.open_device("android", device_id)
             except (ValidationError, ExternalServiceError) as exc:
-                self._append_observation(session, f"scrcpy no se abrió: {exc}")
+                self._append_observation(session, f"scrcpy did not open: {exc}")
             self._start_android_action_observer(session)
         session.thread.start()
         return self.status(session_id)
@@ -543,25 +543,25 @@ class RecorderManager:
         deep_link = str(preparation.get("deep_link", "")).strip()
         reset_data = preparation.get("reset_data") is True
         if package and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.]{2,180}", package):
-            raise ValidationError("El package Android tiene un formato inválido.")
+            raise ValidationError("The Android package name is not valid.")
         if reset_data and not package:
-            raise ValidationError("Para limpiar datos debes indicar el package Android.")
+            raise ValidationError("Clearing data needs the Android package name.")
         if deep_link and (len(deep_link) > 1000 or not re.fullmatch(r"https?://[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]+", deep_link)):
-            raise ValidationError("El deep link debe ser una URL http(s) válida y sin caracteres de control.")
+            raise ValidationError("The deep link must be a valid http(s) URL with no control characters.")
         executable = trusted_which("adb")
         if not executable:
-            raise ExternalServiceError("ADB dejó de estar disponible.")
+            raise ExternalServiceError("ADB is no longer available.")
         if reset_data:
             result = _run([executable, "-s", device_id, "shell", "pm", "clear", package], timeout=20)
             if result.returncode or b"Success" not in result.stdout:
-                raise ExternalServiceError("ADB no pudo limpiar los datos de la aplicación.")
+                raise ExternalServiceError("ADB could not clear the application data.")
         if deep_link:
             result = _run([
                 executable, "-s", device_id, "shell", "am", "start", "-W",
                 "-a", "android.intent.action.VIEW", "-d", deep_link,
             ], timeout=20)
             if result.returncode:
-                raise ExternalServiceError("ADB no pudo abrir el deep link configurado.")
+                raise ExternalServiceError("ADB could not open the configured deep link.")
 
     def _session_health(self, session: RecordingSession) -> dict[str, Any]:
         """Estado vivo de la sesión: sin esto, un dispositivo o un espejo que se caen
@@ -575,7 +575,7 @@ class RecorderManager:
         present = any(item["id"] == session.device_id for item in inventory.get(session.platform, []))
         if not present:
             warnings.append(
-                "El dispositivo ya no aparece en la lista; reconecta el cable o el Wireless Debugging."
+                "The device is no longer listed; reconnect the cable or Wireless Debugging."
             )
         mirror_alive: bool | None = None
         if session.platform == "android" and trusted_which("scrcpy"):
@@ -584,14 +584,14 @@ class RecorderManager:
             # perdido, el espejo también muere y decir "la captura sigue por ADB" sería
             # falso, justo cuando la captura es lo que está fallando.
             if not mirror_alive and present:
-                warnings.append("La ventana de scrcpy está cerrada; la captura sigue por ADB.")
+                warnings.append("The scrcpy window is closed; capture continues over ADB.")
         return {"device_present": present, "mirror_alive": mirror_alive, "warnings": warnings}
 
     def status(self, session_id: str) -> dict[str, Any]:
         with self._lock:
             session = self._sessions.get(session_id)
         if not session:
-            raise ValidationError("La sesión de grabación no existe o expiró.")
+            raise ValidationError("That recording session does not exist or expired.")
         elapsed = (session.ended_at or time.time()) - session.started_at
         return {
             **self._session_health(session),
@@ -622,12 +622,12 @@ class RecorderManager:
         with self._lock:
             session = self._sessions.get(session_id)
         if not session:
-            raise ValidationError("La sesión de grabación no existe o expiró.")
+            raise ValidationError("That recording session does not exist or expired.")
         session.stop_event.set()
         if session.thread:
             session.thread.join(timeout=max(15, session.interval + 2))
             if session.thread.is_alive():
-                raise ExternalServiceError("La captura no pudo detenerse de forma segura. Intenta de nuevo.")
+                raise ExternalServiceError("The capture could not be stopped safely. Try again.")
         self._stop_action_observer(session)
         self._close_appium(session)
         self._close_scrcpy(session.device_id)
@@ -642,11 +642,11 @@ class RecorderManager:
         with self._lock:
             session = self._sessions.get(session_id)
         if not session:
-            raise ValidationError("La sesión de grabación no existe o expiró.")
+            raise ValidationError("That recording session does not exist or expired.")
         if session.error and not session.frames:
             raise ExternalServiceError(session.error)
         if not session.frames:
-            raise ValidationError("No se capturó ninguna pantalla durante la sesión.")
+            raise ValidationError("No screen was captured during the session.")
         images = [
             {"name": path.name, "type": "image/png", "data": base64.b64encode(self._read_frame(path)).decode()}
             for path in session.frames
@@ -668,12 +668,12 @@ class RecorderManager:
         with self._lock:
             session = self._sessions.get(session_id)
         if not session:
-            raise ValidationError("La sesión de grabación no existe o expiró.")
+            raise ValidationError("That recording session does not exist or expired.")
         session.stop_event.set()
         if session.thread:
             session.thread.join(timeout=max(15, session.interval + 2))
             if session.thread.is_alive():
-                raise ExternalServiceError("La captura no pudo cancelarse de forma segura. Intenta de nuevo.")
+                raise ExternalServiceError("The capture could not be cancelled safely. Try again.")
         self._stop_action_observer(session)
         self._close_appium(session)
         self.discard(session_id)
@@ -720,18 +720,18 @@ class RecorderManager:
                 connection_failures = 0
                 session.error = ""
                 if recovered:
-                    self._append_observation(session, f"Conexión recuperada a +{time.time() - session.started_at:.1f}s")
+                    self._append_observation(session, f"Connection recovered at +{time.time() - session.started_at:.1f}s")
                 self._store_frame(session, image)
             except ExternalServiceError as exc:
                 connection_failures += 1
                 if session.stop_event.is_set():
                     break
                 if connection_failures <= 3 and not session.stop_event.is_set():
-                    session.error = f"Conexión interrumpida; reintentando ({connection_failures}/3)."
+                    session.error = f"Connection interrupted; retrying ({connection_failures}/3)."
                     self._persist(session)
                     session.stop_event.wait(session.interval)
                     continue
-                session.error = f"La conexión con el dispositivo se perdió después de 3 reintentos: {exc}"
+                session.error = f"The connection to the device was lost after 3 retries: {exc}"
                 session.stop_event.set()
                 break
             except Exception as exc:
@@ -770,8 +770,8 @@ class RecorderManager:
             self._append_observation(
                 session,
                 f"Frame {index} a +{elapsed:.1f}s"
-                + (f", pantalla: {activity}" if activity else "")
-                + (f"\nElementos visibles: {semantic_change}" if semantic_change else ""),
+                + (f", screen: {activity}" if activity else "")
+                + (f"\nVisible elements: {semantic_change}" if semantic_change else ""),
             )
             self._persist(session)
         return True
@@ -780,7 +780,7 @@ class RecorderManager:
         if session.platform == "android":
             executable = trusted_which("adb")
             if not executable:
-                raise ExternalServiceError("ADB no está disponible desde una ruta confiable.")
+                raise ExternalServiceError("ADB is not reachable from a trusted path.")
             result = _run([executable, "-s", session.device_id, "exec-out", "screencap", "-p"])
             image = result.stdout
         elif session.appium_session_id and self.appium:
@@ -790,7 +790,7 @@ class RecorderManager:
             target = session.directory / "latest.png"
             executable = trusted_which("xcrun")
             if not executable:
-                raise ExternalServiceError("Xcode no está disponible desde una ruta confiable.")
+                raise ExternalServiceError("Xcode is not reachable from a trusted path.")
             result = _run([
                 executable, "simctl", "io", session.device_id, "screenshot", "--type=png", str(target)
             ])
@@ -798,7 +798,7 @@ class RecorderManager:
             target.unlink(missing_ok=True)
         if result.returncode != 0 or not image.startswith(PNG_SIGNATURE):
             detail = result.stderr.decode(errors="replace")[:300].strip()
-            raise ExternalServiceError(f"No se pudo capturar la pantalla. {detail}")
+            raise ExternalServiceError(f"The screen could not be captured. {detail}")
         return image
 
     def _read_frame(self, path: Path) -> bytes:
@@ -809,21 +809,21 @@ class RecorderManager:
         with self._lock:
             session = self._sessions.get(session_id)
         if not session or session.stopped:
-            raise ValidationError("El control guiado no está disponible para esta sesión.")
+            raise ValidationError("Guided control is not available for this session.")
         if session.platform == "android":
             image = self._capture(session)
             if len(image) < 24:
-                raise ExternalServiceError("ADB devolvió una captura PNG incompleta.")
+                raise ExternalServiceError("ADB returned an incomplete PNG capture.")
             width, height = struct.unpack(">II", image[16:24])
             if not 1 <= width <= 10000 or not 1 <= height <= 10000:
-                raise ExternalServiceError("ADB devolvió dimensiones de pantalla inválidas.")
+                raise ExternalServiceError("ADB returned invalid screen dimensions.")
         elif session.appium_session_id and self.appium:
             image = self.appium.screenshot(session.appium_session_id)
             width, height = self.appium.window_rect(session.appium_session_id)
         else:
-            raise ValidationError("El control Appium no está disponible para esta sesión.")
+            raise ValidationError("Appium control is not available for this session.")
         if not image.startswith(PNG_SIGNATURE):
-            raise ExternalServiceError("El dispositivo no devolvió una captura PNG válida.")
+            raise ExternalServiceError("The device did not return a valid PNG capture.")
         return {
             "type": "image/png", "data": base64.b64encode(image).decode(),
             "logical_width": width, "logical_height": height,
@@ -833,14 +833,14 @@ class RecorderManager:
         with self._lock:
             session = self._sessions.get(session_id)
         if not session or session.stopped:
-            raise ValidationError("El control guiado no está disponible para esta sesión.")
+            raise ValidationError("Guided control is not available for this session.")
         action_type = str(request.get("type", ""))
         if action_type == "text":
             value = request.get("text")
             if not isinstance(value, str) or not value or len(value) > 500:
-                raise ValidationError("El texto debe contener entre 1 y 500 caracteres.")
+                raise ValidationError("The text must be 1 to 500 characters.")
             if session.platform == "android" and not re.fullmatch(r"[A-Za-z0-9 @._%+,:-]+", value):
-                raise ValidationError("En Android, el texto guiado sólo admite letras, números y puntuación básica.")
+                raise ValidationError("On Android, guided text only accepts letters, digits and basic punctuation.")
             self._store_frame(session, self._capture(session))
             session.last_guided_action_at = time.time()
             if session.platform == "android":
@@ -848,25 +848,25 @@ class RecorderManager:
             elif session.appium_session_id and self.appium:
                 self.appium.text(session.appium_session_id, value)
             else:
-                raise ValidationError("Appium no está disponible para esta sesión iOS.")
+                raise ValidationError("Appium is not available for this iOS session.")
             self._append_observation(session,
-                f"Acción {session.platform.title()} a +{time.time() - session.started_at:.1f}s: "
-                f"entrada de texto ({len(value)} caracteres; contenido omitido)"
+                f"{session.platform.title()} action at +{time.time() - session.started_at:.1f}s: "
+                f"text entry ({len(value)} characters; content omitted)"
             )
             time.sleep(0.4)
             self._store_frame(session, self._capture(session))
             self._persist(session)
             return {"performed": True}
         if action_type not in {"tap", "swipe"}:
-            raise ValidationError("La acción debe ser tap, swipe o text.")
+            raise ValidationError("The action must be tap, swipe or text.")
 
         def point(name: str) -> tuple[int, int]:
             value = request.get(name)
             if not isinstance(value, dict):
-                raise ValidationError(f"Falta el punto {name}.")
+                raise ValidationError(f"Missing point {name}.")
             coordinates = value.get("x"), value.get("y")
             if any(isinstance(item, bool) or not isinstance(item, int) or not 0 <= item <= 10000 for item in coordinates):
-                raise ValidationError(f"El punto {name} es inválido.")
+                raise ValidationError(f"El punto {name} is invalid.")
             return coordinates
 
         start, end = point("start"), point("end")
@@ -880,9 +880,9 @@ class RecorderManager:
         elif session.appium_session_id and self.appium:
             self.appium.action(session.appium_session_id, action_type, start, end)
         else:
-            raise ValidationError("Appium no está disponible para esta sesión iOS.")
+            raise ValidationError("Appium is not available for this iOS session.")
         self._append_observation(session,
-            f"Acción {session.platform.title()} a +{time.time() - session.started_at:.1f}s: "
+            f"{session.platform.title()} action at +{time.time() - session.started_at:.1f}s: "
             f"{action_type} ({start[0]},{start[1]})→({end[0]},{end[1]})"
         )
         time.sleep(0.4)
@@ -894,10 +894,10 @@ class RecorderManager:
     def _android_input(session: RecordingSession, arguments: list[str]) -> None:
         executable = trusted_which("adb")
         if not executable:
-            raise ExternalServiceError("ADB dejó de estar disponible.")
+            raise ExternalServiceError("ADB is no longer available.")
         result = _run([executable, "-s", session.device_id, "shell", "input", *arguments], timeout=8)
         if result.returncode:
-            raise ExternalServiceError("ADB no pudo ejecutar la acción guiada.")
+            raise ExternalServiceError("ADB could not run the guided action.")
 
     def recovered_sessions(self) -> dict[str, Any]:
         self._cleanup_expired()
@@ -1164,7 +1164,7 @@ class RecorderManager:
                 action = "tap" if distance < 40 else "swipe"
                 if time.time() - session.last_guided_action_at > 1.5:
                     RecorderManager._append_observation(session,
-                        f"Acción Android a +{time.time() - session.started_at:.1f}s: "
+                        f"Android action at +{time.time() - session.started_at:.1f}s: "
                         f"{action} ({start[0]},{start[1]})→({x},{y})"
                     )
                 session.capture_event.set()

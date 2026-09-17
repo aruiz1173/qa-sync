@@ -71,24 +71,24 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def _read_json(self) -> dict[str, Any]:
         if self.headers.get_content_type() != "application/json":
-            raise ValidationError("Content-Type debe ser application/json.")
+            raise ValidationError("Content-Type must be application/json.")
         raw_length = self.headers.get("Content-Length", "")
         if not raw_length.isdigit():
-            raise ValidationError("Content-Length inválido.")
+            raise ValidationError("Invalid Content-Length.")
         length = int(raw_length)
         if length <= 0 or length > self.service.config.max_request_bytes:
-            raise ValidationError("La solicitud está vacía o supera 45 MB.")
+            raise ValidationError("The request is empty or larger than 45 MB.")
         try:
             payload = json.loads(self.rfile.read(length))
         except json.JSONDecodeError as exc:
-            raise ValidationError("JSON inválido.") from exc
+            raise ValidationError("Invalid JSON.") from exc
         if not isinstance(payload, dict):
-            raise ValidationError("El cuerpo debe ser un objeto JSON.")
+            raise ValidationError("The body must be a JSON object.")
         return payload
 
     def do_GET(self) -> None:
         if not self._trusted_browser_context():
-            self._json(403, {"error": "Solicitud local rechazada."})
+            self._json(403, {"error": "Local request rejected."})
             return
         path = urlparse(self.path).path
         if path.startswith("/api/"):
@@ -113,13 +113,13 @@ class AppHandler(BaseHTTPRequestHandler):
                 elif path == "/api/recovery":
                     result = self.service.recovery()
                 else:
-                    self._json(404, {"error": "Ruta no encontrada."})
+                    self._json(404, {"error": "Route not found."})
                     return
                 self._json(200, result)
             except QASyncError as exc:
                 self._json(400, {"error": str(exc)})
             except Exception:
-                self._json(500, {"error": "Error interno. Revisa la terminal para más detalles."})
+                self._json(500, {"error": "Internal error. Check the terminal for details."})
             return
         relative = "index.html" if path == "/" else path.lstrip("/")
         target = (STATIC_DIR / relative).resolve()
@@ -144,7 +144,7 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         if not self._trusted_browser_context():
-            self._json(403, {"error": "Solicitud local rechazada."})
+            self._json(403, {"error": "Local request rejected."})
             return
         try:
             payload = self._read_json()
@@ -153,7 +153,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 result = self.service.analyze(payload)
             elif path == "/api/settings":
                 if self.service.recorder.has_active_sessions():
-                    raise ValidationError("Finaliza o cancela la grabación antes de cambiar la configuración.")
+                    raise ValidationError("Finish or cancel the recording before changing settings.")
                 config = self.settings.save(payload, self.service.config)
                 self.service.recorder.shutdown()
                 type(self).service = QASyncService(config)
@@ -162,7 +162,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 result = self.settings.save_profile(str(payload.get("name", "")), self.service.config)
             elif path == "/api/profile/activate":
                 if self.service.recorder.has_active_sessions():
-                    raise ValidationError("Finaliza o cancela la grabación antes de cambiar de perfil.")
+                    raise ValidationError("Finish or cancel the recording before switching profile.")
                 config = self.settings.activate_profile(str(payload.get("name", "")), self.service.config)
                 self.service.recorder.shutdown()
                 type(self).service = QASyncService(config)
@@ -228,13 +228,13 @@ class AppHandler(BaseHTTPRequestHandler):
             elif path == "/api/rollback":
                 result = self.service.rollback(payload)
             else:
-                self._json(404, {"error": "Ruta no encontrada."})
+                self._json(404, {"error": "Route not found."})
                 return
             self._json(200, result)
         except QASyncError as exc:
             self._json(400, {"error": str(exc)})
         except Exception:
-            self._json(500, {"error": "Error interno. Revisa la terminal para más detalles."})
+            self._json(500, {"error": "Internal error. Check the terminal for details."})
 
 
 class BoundedThreadingHTTPServer(ThreadingHTTPServer):
@@ -262,9 +262,9 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
 
 def run(host: str = "127.0.0.1", port: int = 8787) -> None:
     if host not in {"127.0.0.1", "localhost", "::1"}:
-        raise ValidationError("Por seguridad, el servidor local sólo puede escuchar en loopback.")
+        raise ValidationError("For safety, the local server can only listen on loopback.")
     if not 1 <= port <= 65535:
-        raise ValidationError("El puerto debe estar entre 1 y 65535.")
+        raise ValidationError("The port must be between 1 and 65535.")
     settings = SettingsManager()
     config = settings.load()
     AppHandler.settings = settings
@@ -279,8 +279,8 @@ def run(host: str = "127.0.0.1", port: int = 8787) -> None:
     pid_file = private_dir(state_root()) / "server.pid"
     pid_file.write_text(str(os.getpid()), encoding="utf-8")
     private_file(pid_file)
-    print(f"QA Sync disponible en http://{host}:{port}")
-    print("Presiona Ctrl+C para detenerlo.")
+    print(f"QA Sync available at http://{host}:{port}")
+    print("Press Ctrl+C to stop it.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -292,7 +292,7 @@ def run(host: str = "127.0.0.1", port: int = 8787) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="QA Sync para TestRail")
+    parser = argparse.ArgumentParser(description="QA Sync for TestRail")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)
     args = parser.parse_args()
@@ -301,7 +301,7 @@ def main() -> None:
     except QASyncError as exc:
         # Un .env o unos ajustes inválidos merecen una línea legible, no un traceback
         # que en Windows termina enterrado en server-error.log.
-        raise SystemExit(f"QA Sync no pudo iniciar: {exc}") from exc
+        raise SystemExit(f"QA Sync could not start: {exc}") from exc
 
 
 if __name__ == "__main__":

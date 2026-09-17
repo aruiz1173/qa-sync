@@ -14,7 +14,7 @@ def normalize_case_id(value: object) -> int:
     if text.startswith("C"):
         text = text[1:]
     if not text.isdigit() or int(text) <= 0:
-        raise ValidationError("El ID debe tener formato C123 o 123.")
+        raise ValidationError("The ID must look like C123 or 123.")
     return int(text)
 
 
@@ -28,7 +28,7 @@ def normalize_run_id(value: object) -> int:
         text = text[1:]
     if not text.isdigit() or int(text) <= 0:
         raise ValidationError(
-            "Pega la URL de un run de TestRail o su id, por ejemplo R200788 o "
+            "Paste a TestRail run URL or its id, for example R200788 or "
             "https://tuempresa.testrail.com/index.php?/runs/view/200788"
         )
     return int(text)
@@ -38,7 +38,7 @@ class TestRailClient:
     def __init__(self, config: Config):
         if not config.testrail_ready:
             raise ConfigurationError(
-                "Faltan TESTRAIL_URL, TESTRAIL_EMAIL o TESTRAIL_API_KEY."
+                "TESTRAIL_URL, TESTRAIL_EMAIL or TESTRAIL_API_KEY is missing."
             )
         self.config = config
 
@@ -58,7 +58,7 @@ class TestRailClient:
     def _collection(response: dict[str, Any], key: str) -> list[dict[str, Any]]:
         items = response.get(key, [])
         if not isinstance(items, list):
-            raise ValidationError(f"TestRail devolvió una colección '{key}' inválida.")
+            raise ValidationError(f"TestRail returned an invalid '{key}' collection.")
         return [item for item in items if isinstance(item, dict)]
 
     def _all(self, route: str, key: str) -> list[dict[str, Any]]:
@@ -79,7 +79,7 @@ class TestRailClient:
                 break
             offset += limit
             if offset >= 25_000:
-                raise ValidationError(f"TestRail devolvió demasiados elementos en '{key}'.")
+                raise ValidationError(f"TestRail returned too many items in '{key}'.")
         return collected
 
     def get_case_fields(self) -> list[dict[str, Any]]:
@@ -91,7 +91,7 @@ class TestRailClient:
         for key in ("case_fields", "fields"):
             if key in response:
                 return self._collection(response, key)
-        raise ValidationError("TestRail no devolvió la lista de campos de casos.")
+        raise ValidationError("TestRail returned no case field list.")
 
     def validate_configuration(self) -> dict[str, Any]:
         fields = self.get_case_fields()
@@ -116,25 +116,25 @@ class TestRailClient:
         for name, expected_types in required.items():
             field = by_name.get(name)
             if not field:
-                errors.append(f"No existe el campo {name}.")
+                errors.append(f"There is no field named {name}.")
                 continue
             type_id = field.get("type_id")
             if isinstance(type_id, int) and type_id not in expected_types:
-                errors.append(f"El campo {name} tiene un tipo incompatible ({type_id}).")
+                errors.append(f"Field {name} has an incompatible type ({type_id}).")
             if field.get("configs") and not applicable_configs(field):
-                errors.append(f"El campo {name} no está habilitado para el proyecto configurado.")
+                errors.append(f"Field {name} is not enabled for the configured project.")
 
         platform_name = self.config.testrail_platform_field
         if platform_name:
             platform_field = by_name.get(platform_name)
             if not platform_field:
-                errors.append(f"No existe el campo de plataforma {platform_name}.")
+                errors.append(f"There is no field named de plataforma {platform_name}.")
             elif platform_field.get("type_id") not in {6, 12, None}:
-                warnings.append(f"El campo {platform_name} no parece ser dropdown o multiselect.")
+                warnings.append(f"Field {platform_name} does not look like a dropdown or multiselect.")
             if not self.config.testrail_android_value or not self.config.testrail_ios_value:
-                warnings.append("Falta uno de los valores configurados para Android o iOS.")
+                warnings.append("One of the configured Android or iOS values is missing.")
             elif self.config.testrail_android_value == self.config.testrail_ios_value:
-                errors.append("Android e iOS no pueden usar el mismo valor de plataforma.")
+                errors.append("Android and iOS cannot share the same platform value.")
             elif platform_field:
                 option_ids: set[str] = set()
                 for field_config in applicable_configs(platform_field):
@@ -151,7 +151,7 @@ class TestRailClient:
                     ("iOS", self.config.testrail_ios_value),
                 ):
                     if option_ids and value not in option_ids:
-                        errors.append(f"El valor {value} de {label} no existe en {platform_name}.")
+                        errors.append(f"Value {value} de {label} does not exist in {platform_name}.")
 
         return {
             "valid": not errors,

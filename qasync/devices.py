@@ -31,7 +31,7 @@ def adb_endpoint_result(output: str) -> tuple[bool, str]:
             return False, text
     if "connected to" in lowered or "successfully paired" in lowered:
         return True, text
-    return False, text or "ADB no devolvió ninguna respuesta."
+    return False, text or "ADB returned no output."
 
 
 def parse_adb_mdns_services(output: str) -> list[dict[str, str]]:
@@ -94,7 +94,7 @@ def parse_ios_devices(output: str) -> list[dict[str, str]]:
     try:
         runtimes = json.loads(output).get("devices", {})
     except (json.JSONDecodeError, AttributeError) as exc:
-        raise ExternalServiceError("simctl devolvió una lista de dispositivos inválida.") from exc
+        raise ExternalServiceError("simctl returned an invalid device list.") from exc
     return [{"id": str(item["udid"]), "name": str(item.get("name", item["udid"])), "kind": runtime.rsplit(".", 1)[-1].replace("-", " ")} for runtime, entries in runtimes.items() for item in entries if item.get("state") == "Booted" and item.get("isAvailable", True)]
 
 
