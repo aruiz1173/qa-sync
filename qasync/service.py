@@ -649,12 +649,14 @@ class QASyncService:
         changes = copy.deepcopy(proposal.changes)
         steps = changes.get(self.config.testrail_steps_field, [])
         if not isinstance(steps, list) or any(index < 0 or index >= len(steps) for index in optional_steps):
-            raise ValidationError("Uno de los pasos opcionales does not exist in la propuesta.")
+            raise ValidationError("One of the optional steps does not exist in the proposal.")
         for index in set(optional_steps):
             step = steps[index]
             content = str(step.get("content", ""))
-            if not content.lower().startswith("[opcional]"):
-                step["content"] = f"[Opcional] {content}".strip()
+            # Se acepta el marcador anterior en español para no dejar huérfanos los
+            # casos que esta app ya actualizó antes de la traducción.
+            if not content.lower().startswith(("[optional]", "[opcional]")):
+                step["content"] = f"[Optional] {content}".strip()
         client = TestRailClient(self.config)
         latest = client.get_case(proposal.case_id)
         stale_fields = [key for key in changes if latest.get(key) != proposal.current.get(key)]

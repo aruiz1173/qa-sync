@@ -96,6 +96,75 @@ function renderTests(){
   document.querySelectorAll('[data-test]').forEach(button=>button.addEventListener('click',()=>selectTest(Number(button.dataset.test))));
 }
 
+
+// TestRail guarda los casos con HTML, así que mostrarlo escapado llenaba la vista de
+// etiquetas. Se renderiza, pero nunca crudo: el contenido de TestRail es dato no
+// confiable, igual que para el prompt. Allowlist de etiquetas, sin ningún atributo
+// salvo href http(s), y las etiquetas peligrosas se eliminan con su contenido.
+const RICH_TAGS=new Set(['P','BR','UL','OL','LI','STRONG','B','EM','I','U','SPAN','CODE','PRE','A','H1','H2','H3','H4','H5','H6','TABLE','THEAD','TBODY','TR','TD','TH','BLOCKQUOTE','HR','DIV','SUB','SUP','SMALL','DEL','INS']);
+const RICH_DROP=new Set(['SCRIPT','STYLE','IFRAME','OBJECT','EMBED','LINK','META','SVG','MATH','TEMPLATE','NOSCRIPT','FORM','INPUT','BUTTON','SELECT','TEXTAREA','BASE','IMG','VIDEO','AUDIO','SOURCE','CANVAS']);
+
+function richHtml(value){
+  const doc=new DOMParser().parseFromString(String(value??''),'text/html');
+  const clean=node=>{
+    for(const child of [...node.childNodes]){
+      if(child.nodeType===Node.TEXT_NODE)continue;
+      if(child.nodeType!==Node.ELEMENT_NODE){child.remove();continue}
+      const tag=child.tagName.toUpperCase();
+      if(RICH_DROP.has(tag)){child.remove();continue}
+      if(!RICH_TAGS.has(tag)){
+        // Se limpia dentro antes de desenvolver, o los hijos se saltarían el filtro.
+        clean(child);
+        child.replaceWith(...child.childNodes);
+        continue;
+      }
+      for(const attr of [...child.attributes]){
+        const name=attr.name.toLowerCase();
+        const keep=tag==='A'&&name==='href'&&/^https?:\/\//i.test(attr.value.trim());
+        if(!keep)child.removeAttribute(attr.name);
+      }
+      if(tag==='A'){child.setAttribute('target','_blank');child.setAttribute('rel','noopener noreferrer')}
+      clean(child);
+    }
+  };
+  clean(doc.body);
+  return doc.body.innerHTML;
+}
+
+// Los pasos como los muestra TestRail: acción y resultado esperado emparejados.
+function stepsPreview(steps){
+  if(!steps.length)return '<p class="rich-empty">No steps.</p>';
+  return `<ol class="rich-steps">${steps.map(step=>{
+    const content=String(step.content||'');
+    const optional=/^\[(optional|opcional)\]\s*/i.test(content);
+    return `<li><div class="rich-step">${optional?'<span class="optional-badge">Optional</span>':''}<div class="rich-body">${richHtml(content.replace(/^\[(optional|opcional)\]\s*/i,''))}</div><div class="rich-expected"><span class="rich-label">Expected result</span><div class="rich-body">${richHtml(step.expected||'')||'<p class="rich-empty">No expected result</p>'}</div></div></div></li>`;
+  }).join('')}</ol>`;
+}
+
+
+// El editor guarda HTML crudo porque eso es lo que va a TestRail; el preview lo
+// muestra ya interpretado, para revisar lo que verá el equipo y no un muro de etiquetas.
+function renderPreview(){
+  const edits=proposalEdits();
+  const box=$('#proposal-preview');
+  if(!box)return;
+  box.innerHTML=`<div class="rich-case"><p class="overline">PREVIEW</p><h3>${escapeHtml(edits.title)}</h3>`
+    +`<section><h4>Preconditions</h4><div class="rich-body">${richHtml(edits.preconditions)||'<p class="rich-empty">No preconditions.</p>'}</div></section>`
+    +`<section><h4>Steps</h4>${stepsPreview(edits.steps)}</section></div>`;
+}
+
+function togglePreview(){
+  const preview=$('#proposal-preview');
+  const editor=document.querySelector('.proposal-editor');
+  const button=$('#toggle-preview');
+  if(!preview||!editor||!button)return;
+  const showing=preview.hidden;
+  if(showing)renderPreview();
+  preview.hidden=!showing;
+  editor.hidden=showing;
+  button.textContent=showing?'Back to editing':'Preview as TestRail';
+}
+
 function showCaseEmpty(){$('#case-empty').hidden=false;$('#case-loading').hidden=true;$('#case-content').hidden=true;$('#proposal-content').hidden=true}
 async function selectTest(id){
   state.activeTest=state.tests.find(test=>test.id===id);renderTests();$('#case-empty').hidden=true;$('#case-content').hidden=true;$('#proposal-content').hidden=true;$('#case-loading').hidden=false;
@@ -106,8 +175,8 @@ async function selectTest(id){
 function renderCase(){
   const item=state.currentCase;$('#case-loading').hidden=true;$('#proposal-content').hidden=true;$('#case-content').hidden=false;
   $('#case-id').textContent=`CASE C${item.id}`;$('#case-title').textContent=item.title;$('#case-refs').textContent=item.refs||'No references';$('#case-estimate').textContent=item.estimate||'No estimate';
-  $('#case-preconditions').textContent=item.preconditions||'No preconditions documented.';
-  const steps=item.steps||[];$('#case-steps').innerHTML=steps.length?steps.map(step=>{const content=String(step.content||'');const optional=/^\[opcional\]\s*/i.test(content);return `<li><div>${optional?'<span class="optional-badge">Optional</span>':''}<p class="step-action">${escapeHtml(content.replace(/^\[opcional\]\s*/i,''))}</p><p class="step-expected">${escapeHtml(step.expected||'No expected result')}</p></div></li>`}).join(''):'<li><div><p class="step-action">This case has no separate steps.</p></div></li>';
+  $('#case-preconditions').innerHTML=richHtml(item.preconditions)||'<p class="rich-empty">No preconditions documented.</p>';
+  const steps=item.steps||[];$('#case-steps').innerHTML=steps.length?steps.map(step=>{const content=String(step.content||'');const optional=/^\[(optional|opcional)\]\s*/i.test(content);return `<li><div>${optional?'<span class="optional-badge">Optional</span>':''}<div class="rich-body">${richHtml(content.replace(/^\[(optional|opcional)\]\s*/i,''))}</div><div class="rich-expected"><span class="rich-label">Expected result</span><div class="rich-body">${richHtml(step.expected)||'<p class="rich-empty">No expected result</p>'}</div></div></div></li>`}).join(''):'<li><div><p class="step-action">This case has no separate steps.</p></div></li>';
 }
 
 async function openHistory(){
@@ -273,13 +342,13 @@ function renderProposal(){
   const data=state.proposal;$('#case-content').hidden=true;$('#proposal-content').hidden=false;
   const proposedSteps=Array.isArray(data.changes[data.steps_field])?data.changes[data.steps_field]:[];
   const preKey=data.preconditions_field;
-  const stepMarkup=(step,index)=>`<article class="edit-step" data-edit-step><div class="step-toolbar"><strong>Step ${index+1}</strong><div><button class="step-move secondary" data-direction="up" type="button" aria-label="Move step up">↑</button><button class="step-move secondary" data-direction="down" type="button" aria-label="Move step down">↓</button><button class="step-delete secondary" type="button">Delete</button></div></div><label>Action<textarea class="edit-action" maxlength="5000">${escapeHtml(String(step.content||'').replace(/^\[opcional\]\s*/i,''))}</textarea></label><label>Expected result<textarea class="edit-expected" maxlength="5000">${escapeHtml(step.expected||'')}</textarea></label><label class="inline-check"><input class="optional-check" type="checkbox" ${/^\[opcional\]/i.test(step.content||'')?'checked':''}> Optional step</label></article>`;
-  const editor=`<section class="proposal-editor"><label>Title<input id="edit-title" maxlength="250" value="${escapeHtml(data.changes.title||'')}"></label><label>Preconditions<textarea id="edit-preconditions" maxlength="10000">${escapeHtml(data.changes[preKey]||'')}</textarea></label><div class="steps-editor-head"><h3>Pasos propuestos</h3><button id="add-step" class="secondary" type="button">Agregar paso</button></div><div id="steps-editor">${proposedSteps.map(stepMarkup).join('')}</div></section>`;
+  const stepMarkup=(step,index)=>`<article class="edit-step" data-edit-step><div class="step-toolbar"><strong>Step ${index+1}</strong><div><button class="step-move secondary" data-direction="up" type="button" aria-label="Move step up">↑</button><button class="step-move secondary" data-direction="down" type="button" aria-label="Move step down">↓</button><button class="step-delete secondary" type="button">Delete</button></div></div><label>Action<textarea class="edit-action" maxlength="5000">${escapeHtml(String(step.content||'').replace(/^\[optional\]\s*|^\[opcional\]\s*/i,''))}</textarea></label><label>Expected result<textarea class="edit-expected" maxlength="5000">${escapeHtml(step.expected||'')}</textarea></label><label class="inline-check"><input class="optional-check" type="checkbox" ${/^\[(optional|opcional)\]/i.test(step.content||'')?'checked':''}> Optional step</label></article>`;
+  const editor=`<section class="proposal-editor"><label>Title<input id="edit-title" maxlength="250" value="${escapeHtml(data.changes.title||'')}"></label><label>Preconditions<textarea id="edit-preconditions" maxlength="10000">${escapeHtml(data.changes[preKey]||'')}</textarea></label><div class="steps-editor-head"><h3>Proposed steps</h3><button id="add-step" class="secondary" type="button">Add step</button></div><div id="steps-editor">${proposedSteps.map(stepMarkup).join('')}</div></section><section class="proposal-preview" id="proposal-preview" hidden></section>`;
   const simulation=data.write_mode==='review_only';
   const quality=data.vision_quality==='maximum'?'maximum · 2 calls':data.vision_quality==='economical'?'efficient · 1 call':'high · 1 call';
   const usage=data.usage||{};const usageText=usage.model_calls?` · ${usage.frames_analyzed}/${usage.frames_received} screens · ${usage.model_calls} llamada${usage.model_calls===1?'':'s'}`:'';
-  $('#proposal-content').innerHTML=`<button id="back-case" class="secondary back-button" type="button">Back to case</button><div class="proposal-head"><div><p class="overline">PROPOSAL FOR C${data.case_id}</p><h2>Review and edit the update</h2></div><span class="confidence">${Math.round(data.confidence*100)}% confianza</span></div>${data.provider_used?`<p class="provider-used">Analizado con ${escapeHtml(data.provider_used)} · ${quality}${usageText}</p>`:''}${simulation?'<div class="warnings">Dry run is on: you can review and edit, but nothing is written to TestRail.</div>':''}${data.warnings.length?`<div class="warnings">${data.warnings.map(escapeHtml).join('<br>')}</div>`:''}${editor}<div class="approval"><label for="confirmation">${simulation?'Updating is blocked by configuration.':`Type ${escapeHtml(data.confirmation)} to update TestRail.`}</label><div class="approval-row"><input id="confirmation" autocomplete="off" placeholder="Exact confirmation" ${simulation?'disabled':''}><button id="save-draft" class="secondary" type="button">Save draft</button><button id="apply-update" class="primary" type="button" ${simulation?'disabled':''}>Update TestRail</button></div></div>`;
-  $('#back-case').addEventListener('click',renderCase);$('#apply-update').addEventListener('click',applyProposal);const draftButton=$('#save-draft');if(draftButton)draftButton.addEventListener('click',saveDraft);$('#add-step').addEventListener('click',()=>{const wrapper=document.createElement('div');wrapper.innerHTML=stepMarkup({content:'',expected:''},document.querySelectorAll('[data-edit-step]').length);$('#steps-editor').append(wrapper.firstElementChild);bindStepEditor()});bindStepEditor();
+  $('#proposal-content').innerHTML=`<button id="back-case" class="secondary back-button" type="button">Back to case</button><div class="proposal-head"><div><p class="overline">PROPOSAL FOR C${data.case_id}</p><h2>Review and edit the update</h2></div><span class="confidence">${Math.round(data.confidence*100)}% confidence</span></div><div class="preview-toggle"><button id="toggle-preview" class="secondary" type="button">Preview as TestRail</button></div>${data.provider_used?`<p class="provider-used">Analysed with ${escapeHtml(data.provider_used)} · ${quality}${usageText}</p>`:''}${simulation?'<div class="warnings">Dry run is on: you can review and edit, but nothing is written to TestRail.</div>':''}${data.warnings.length?`<div class="warnings">${data.warnings.map(escapeHtml).join('<br>')}</div>`:''}${editor}<div class="approval"><label for="confirmation">${simulation?'Updating is blocked by configuration.':`Type ${escapeHtml(data.confirmation)} to update TestRail.`}</label><div class="approval-row"><input id="confirmation" autocomplete="off" placeholder="Exact confirmation" ${simulation?'disabled':''}><button id="save-draft" class="secondary" type="button">Save draft</button><button id="apply-update" class="primary" type="button" ${simulation?'disabled':''}>Update TestRail</button></div></div>`;
+  $('#back-case').addEventListener('click',renderCase);$('#apply-update').addEventListener('click',applyProposal);const previewButton=$('#toggle-preview');if(previewButton)previewButton.addEventListener('click',togglePreview);const draftButton=$('#save-draft');if(draftButton)draftButton.addEventListener('click',saveDraft);$('#add-step').addEventListener('click',()=>{const wrapper=document.createElement('div');wrapper.innerHTML=stepMarkup({content:'',expected:''},document.querySelectorAll('[data-edit-step]').length);$('#steps-editor').append(wrapper.firstElementChild);bindStepEditor()});bindStepEditor();
 }
 function renumberSteps(){const steps=[...document.querySelectorAll('[data-edit-step]')];steps.forEach((step,index)=>{step.querySelector('.step-toolbar strong').textContent=`Step ${index+1}`;step.querySelector('[data-direction="up"]').disabled=index===0;step.querySelector('[data-direction="down"]').disabled=index===steps.length-1})}
 function bindStepEditor(){document.querySelectorAll('.step-move').forEach(button=>{button.onclick=()=>{const step=button.closest('[data-edit-step]');const sibling=button.dataset.direction==='up'?step.previousElementSibling:step.nextElementSibling;if(!sibling)return;if(button.dataset.direction==='up')step.parentElement.insertBefore(step,sibling);else step.parentElement.insertBefore(sibling,step);renumberSteps()}});document.querySelectorAll('.step-delete').forEach(button=>{button.onclick=()=>{if(document.querySelectorAll('[data-edit-step]').length===1)return showToast('La propuesta debe conservar al menos un paso.',true);button.closest('[data-edit-step]').remove();renumberSteps()}});renumberSteps()}

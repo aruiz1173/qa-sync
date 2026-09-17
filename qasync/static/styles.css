@@ -60,3 +60,19 @@ dialog{width:min(590px,calc(100% - 32px));padding:0;border:0;border-radius:var(-
 .draft-item{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--color-border);border-radius:var(--radius-sm);margin-bottom:6px}
 .draft-item p{margin:3px 0 0;color:var(--color-text-muted);font-size:11px}
 .draft-actions{display:flex;gap:6px;flex:none}
+.preview-toggle{margin:0 0 14px}
+.rich-body{font-size:13px;line-height:1.55}
+.rich-body p{margin:0 0 6px}.rich-body p:last-child{margin-bottom:0}
+.rich-body ul,.rich-body ol{margin:0 0 6px;padding-left:20px}
+.rich-body li{margin:0 0 3px}
+.rich-body table{border-collapse:collapse;margin:6px 0}
+.rich-body td,.rich-body th{border:1px solid var(--color-border);padding:5px 8px;text-align:left}
+.rich-body a{color:var(--color-primary)}
+.rich-empty{margin:0;color:var(--color-text-muted);font-size:12px;font-style:italic}
+.rich-label{display:block;margin-bottom:4px;color:var(--color-text-muted);font-size:10px;font-weight:650;letter-spacing:.04em;text-transform:uppercase}
+.rich-expected{margin-top:9px;padding-top:9px;border-top:1px dashed var(--color-border)}
+.rich-steps{margin:0;padding-left:20px}
+.rich-steps>li{margin:0 0 10px}
+.rich-step{padding:11px 13px;border:1px solid var(--color-border);border-radius:var(--radius-sm);background:var(--color-surface)}
+.rich-case h3{margin:6px 0 14px}
+.rich-case h4{margin:16px 0 7px;font-size:12px;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.04em}

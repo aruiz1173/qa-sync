@@ -100,6 +100,35 @@ class CaseIdTests(unittest.TestCase):
             self.assertEqual(os.environ.pop("QA_SYNC_LITERAL"), f"$(touch {marker})")
             self.assertFalse(marker.exists())
 
+    def test_rendered_testrail_html_is_restricted_to_an_allowlist(self):
+        """TestRail content is rendered, so its markup policy must stay locked down.
+
+        Este es un chequeo estático de la política: no ejecuto el saneador, porque el
+        proyecto no tiene entorno de pruebas de JavaScript ni DOM.
+        """
+        root = Path(__file__).resolve().parents[1]
+        js = (root / "qasync" / "static" / "app.js").read_text(encoding="utf-8")
+        dropped = re.search(r"const RICH_DROP=new Set\(\[([^\]]*)\]\)", js)
+        allowed = re.search(r"const RICH_TAGS=new Set\(\[([^\]]*)\]\)", js)
+        self.assertIsNotNone(dropped, "no existe la lista de etiquetas eliminadas")
+        self.assertIsNotNone(allowed, "no existe la allowlist de etiquetas")
+        for tag in ("SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "FORM", "LINK", "META", "BASE", "SVG"):
+            with self.subTest(tag=tag):
+                self.assertIn(tag, dropped.group(1))
+                self.assertNotIn(f"'{tag}'", allowed.group(1))
+        # Todo atributo se elimina salvo un href http(s): sin eso pasarían onerror,
+        # style o javascript: aunque la etiqueta esté permitida.
+        self.assertIn("removeAttribute", js)
+        self.assertIn("/^https?:\\/\\//i.test(attr.value.trim())", js)
+
+        # La CSP es la segunda barrera y no debe aflojarse.
+        app = (root / "qasync" / "app.py").read_text(encoding="utf-8")
+        policy = re.search(r'Content-Security-Policy", "([^"]+)"', app)
+        self.assertIsNotNone(policy)
+        self.assertIn("script-src 'self'", policy.group(1))
+        self.assertNotIn("unsafe-inline", policy.group(1).split("style-src")[0])
+        self.assertIn("object-src 'none'", policy.group(1))
+
     def test_dashboard_never_demands_more_width_than_its_breakpoint(self):
         """El ancho mínimo de la rejilla debe caber en el viewport donde se aplica.
 
@@ -1666,7 +1695,26 @@ class ServiceTests(unittest.TestCase):
             self.assertTrue(result["updated"])
             sent = client_type.return_value.update_case.call_args.args[1]
             self.assertEqual(sent["custom_steps_separated"][0]["content"], "Tap Pay")
-            self.assertEqual(sent["custom_steps_separated"][1]["content"], "[Opcional] Close receipt")
+            self.assertEqual(sent["custom_steps_separated"][1]["content"], "[Optional] Close receipt")
+
+    @patch("qasync.service.TestRailClient")
+    def test_legacy_optional_marker_is_not_doubled(self, client_type):
+        # Los casos que esta app marcó antes de la traducción llevan [Opcional]:
+        # volver a marcarlos daría "[Optional] [Opcional] ...".
+        steps = [{"content": "[Opcional] Close receipt", "expected": "Gone"}]
+        store = ProposalStore()
+        token = store.put(Proposal(
+            12, "android", {"custom_steps_separated": steps},
+            {"custom_steps_separated": steps}, time.time(),
+        ))
+        client = client_type.return_value
+        client.get_case.return_value = {"custom_steps_separated": steps}
+        client.update_case.return_value = {"title": "ok"}
+        QASyncService(config(), store).apply({
+            "proposal_token": token, "confirmation": "ACTUALIZAR C12", "optional_steps": [0],
+        })
+        sent = client.update_case.call_args.args[1]
+        self.assertEqual(sent["custom_steps_separated"][0]["content"], "[Opcional] Close receipt")
 
     @patch("qasync.service.TestRailClient")
     def test_apply_refuses_stale_proposal(self, client_type):
