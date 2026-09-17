@@ -76,3 +76,12 @@ dialog{width:min(590px,calc(100% - 32px));padding:0;border:0;border-radius:var(-
 .rich-step{padding:11px 13px;border:1px solid var(--color-border);border-radius:var(--radius-sm);background:var(--color-surface)}
 .rich-case h3{margin:6px 0 14px}
 .rich-case h4{margin:16px 0 7px;font-size:12px;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.04em}
+
+/* El ejemplo de procedimientos: las reglas y el caso que producen, lado a lado. */
+.procedures-example{grid-column:1/-1;margin-top:12px;padding:11px 13px;border:1px solid var(--color-border);border-radius:var(--radius-sm);background:var(--color-secondary)}
+.procedures-example summary{cursor:pointer;font-size:11px;font-weight:700}
+.procedures-example-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.35fr);gap:var(--spacing-lg);margin-top:14px}
+.procedures-rules{margin:8px 0 0;padding-left:17px;color:var(--color-text-muted);font-size:11px;line-height:1.6}
+.procedures-example .rich-case{padding:13px;border:1px solid var(--color-border);border-radius:var(--radius-sm);background:var(--color-surface)}
+.procedures-example .rich-case h3{font-size:13px}
+@media(max-width:940px){.procedures-example-grid{grid-template-columns:1fr}}

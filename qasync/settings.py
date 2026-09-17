@@ -30,6 +30,7 @@ PUBLIC_FIELDS = {
     "capture_interval",
     "hourly_rate_usd",
     "case_template",
+    "test_procedures",
     "appium_url",
     "ios_bundle_id",
     "appium_capabilities_json",
@@ -272,6 +273,10 @@ class SettingsManager:
         if len(template) > 4000:
             raise ValidationError("The case template must be 4000 characters or fewer.")
         values["case_template"] = template.strip()
+        procedures = str(values.get("test_procedures", "") or "")
+        if len(procedures) > 4000:
+            raise ValidationError("The test procedures must be 4000 characters or fewer.")
+        values["test_procedures"] = procedures.strip()
         bundle_id = str(values.get("ios_bundle_id", "")).strip()
         if bool(appium_url) != bool(bundle_id):
             raise ValidationError("Set the Appium URL and the iOS bundle ID together.")

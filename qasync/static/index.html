@@ -81,6 +81,42 @@
       </div>
     </section>
     <section class="settings-section">
+      <div><strong>Personalized test procedures</strong><p>Your own working rules: fixed staging data, verbs you use, anything every case of yours must do. They win over the template and the style, and are sent with every analysis. They cannot make the model invent a step it did not see.</p></div>
+      <div class="settings-fields">
+        <label class="wide">Procedures<textarea id="test-procedures" maxlength="4000" rows="7" placeholder="One rule per line. Example:&#10;- In staging the verification code is always 123456; write the value.&#10;- Every case ends by logging out and confirming the login screen.&#10;- Steps that only apply to tablets start with [Optional].&#10;- Use Tap for touches and Enter for typing, never Click."></textarea></label>
+        <div class="profile-actions"><button id="save-procedures" class="secondary" type="button">Save procedures</button><button id="load-procedures-example" class="secondary" type="button">Load the example</button></div>
+      </div>
+      <details class="procedures-example">
+        <summary>See how these procedures look in a case</summary>
+        <div class="procedures-example-grid">
+          <div>
+            <p class="overline">PROCEDURES WRITTEN</p>
+            <ul class="procedures-rules">
+              <li>In staging the verification code is always 123456; write the value.</li>
+              <li>Every case ends by logging out and confirming the login screen.</li>
+              <li>Steps that only apply to tablets start with [Optional].</li>
+              <li>Use Tap for touches and Enter for typing, never Click.</li>
+              <li>Preconditions list the account as user / password / code.</li>
+            </ul>
+          </div>
+          <div class="rich-case">
+            <p class="overline">EXAMPLE OUTPUT &mdash; NOT A REAL RUN</p>
+            <h3>Verify sign-in with verification code (staging) - Android tablet</h3>
+            <section><h4>Preconditions</h4><div class="rich-body"><ul><li>Staging account: staging-qa@example.com / Str0ngStaging! / verification code 123456</li><li>Device: Galaxy Tab A8, Android 14, app build from staging</li></ul></div></section>
+            <section><h4>Steps</h4>
+              <ol class="rich-steps">
+                <li><div class="rich-step"><div class="rich-body"><p>Tap <strong>Log in</strong> on the welcome screen.</p></div><div class="rich-expected"><span class="rich-label">Expected result</span><div class="rich-body"><ul><li>The email field takes focus.</li></ul></div></div></div></li>
+                <li><div class="rich-step"><div class="rich-body"><p>Enter the account email and password from the preconditions and tap <strong>Continue</strong>.</p></div><div class="rich-expected"><span class="rich-label">Expected result</span><div class="rich-body"><ul><li>The verification screen opens with an empty 6-digit field.</li></ul></div></div></div></li>
+                <li><div class="rich-step"><div class="rich-body"><p>Enter the verification code <strong>123456</strong>.</p></div><div class="rich-expected"><span class="rich-label">Expected result</span><div class="rich-body"><ul><li>The home screen loads with the account name in the top bar.</li></ul></div></div></div></li>
+                <li><div class="rich-step"><span class="optional-badge">Optional</span><div class="rich-body"><p>Rotate the tablet to landscape.</p></div><div class="rich-expected"><span class="rich-label">Expected result</span><div class="rich-body"><ul><li>The home screen keeps the session and re-lays out in two columns.</li></ul></div></div></div></li>
+                <li><div class="rich-step"><div class="rich-body"><p>Open the menu and tap <strong>Log out</strong>.</p></div><div class="rich-expected"><span class="rich-label">Expected result</span><div class="rich-body"><ul><li>The login screen is shown and reopening the app does not restore the session.</li></ul></div></div></div></li>
+              </ol>
+            </section>
+          </div>
+        </div>
+      </details>
+    </section>
+    <section class="settings-section">
       <div><strong>Drafts by case</strong><p>A draft never expires and is never written to TestRail. Reopen one to keep editing, then apply it when it is ready.</p></div>
       <div id="drafts-list" class="history-list"></div>
     </section>

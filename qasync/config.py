@@ -53,6 +53,7 @@ class Config:
     capture_interval: float = 1.25
     hourly_rate_usd: float = 0.0
     case_template: str = ""
+    test_procedures: str = ""
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -85,6 +86,7 @@ class Config:
             capture_interval=_env_float("QA_SYNC_CAPTURE_INTERVAL", 1.25),
             hourly_rate_usd=_env_float("QA_SYNC_HOURLY_RATE_USD", 0.0),
             case_template=_env("QA_SYNC_CASE_TEMPLATE"),
+            test_procedures=_env("QA_SYNC_TEST_PROCEDURES"),
         )
 
     @property

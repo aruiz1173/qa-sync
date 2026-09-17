@@ -490,6 +490,7 @@ class QASyncService:
             style_samples=self._style_samples(client, current, request.get("project_id")),
             target_config=str(request.get("target_config", ""))[:200],
             case_template=self.config.case_template,
+            test_procedures=self.config.test_procedures,
             platform=platform,
             images=request.get("images") or [],
             context=str(request.get("context", ""))[:12000],

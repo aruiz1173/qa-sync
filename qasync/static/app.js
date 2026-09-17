@@ -427,7 +427,7 @@ async function refreshDrafts(){
 }
 
 async function openDraftsDialog(){
-  try{const settings=await getJson('/api/settings');$('#case-template').value=settings.case_template||''}catch(_){}
+  try{const settings=await getJson('/api/settings');$('#case-template').value=settings.case_template||'';$('#test-procedures').value=settings.test_procedures||''}catch(_){}
   $('#drafts-dialog').showModal();
   refreshDrafts();
 }
@@ -437,6 +437,28 @@ async function saveTemplate(){
   try{await api('/api/settings',{case_template:$('#case-template').value});showToast('Template saved. It is sent with every analysis.')}
   catch(error){showToast(error.message,true)}
   finally{button.disabled=false}
+}
+
+async function saveProcedures(){
+  const button=$('#save-procedures');button.disabled=true;
+  try{await api('/api/settings',{test_procedures:$('#test-procedures').value});showToast('Procedures saved. They are sent with every analysis.')}
+  catch(error){showToast(error.message,true)}
+  finally{button.disabled=false}
+}
+
+// Las mismas reglas del ejemplo de al lado: se ve el resultado y se parte de él.
+const PROCEDURES_EXAMPLE=['In staging the verification code is always 123456; write the value.',
+  'Every case ends by logging out and confirming the login screen.',
+  'Steps that only apply to tablets start with [Optional].',
+  'Use Tap for touches and Enter for typing, never Click.',
+  'Preconditions list the account as user / password / code.'].map(rule=>'- '+rule).join('
+');
+
+function loadProceduresExample(){
+  const field=$('#test-procedures');
+  if(field.value.trim()&&!confirm('Replace what you wrote with the example?'))return;
+  field.value=PROCEDURES_EXAMPLE;
+  field.focus();
 }
 
 async function openDraft(draftId){
@@ -508,7 +530,7 @@ $('#project-select').addEventListener('change',()=>{state.activeRun=null;showCas
 $('#refresh-runs').addEventListener('click',loadRuns);$('#case-search').addEventListener('input',renderTests);$('#update-case').addEventListener('click',openUpdateDialog);$('#close-dialog').addEventListener('click',closeUpdateDialog);$('#cancel-update').addEventListener('click',closeUpdateDialog);$('#continue-update').addEventListener('click',continueUpdate);$('#refresh-devices').addEventListener('click',refreshDevices);document.querySelectorAll('input[name="platform"]').forEach(input=>input.addEventListener('change',renderDevices));$('#update-dialog').addEventListener('cancel',event=>{if(state.session){event.preventDefault();showToast('Finish the journey before closing.',true)}});
 $('#history-case').addEventListener('click',openHistory);$('#close-history').addEventListener('click',()=>$('#history-dialog').close());
 $('#connect-wireless').addEventListener('click',connectWireless);
-$('#open-drafts').addEventListener('click',openDraftsDialog);$('#close-drafts').addEventListener('click',()=>$('#drafts-dialog').close());$('#save-template').addEventListener('click',saveTemplate);$('#open-matrix').addEventListener('click',async()=>{$('#matrix-dialog').showModal();$('#matrix-list').innerHTML='<div class="skeleton"></div>';try{const data=await getJson('/api/device-matrix');$('#matrix-list').innerHTML=data.matrix.length?data.matrix.map(item=>`<article class="history-item"><div><strong>${escapeHtml(item.device_name||item.device_id)}</strong><p>${escapeHtml(item.platform)} · ${escapeHtml(item.version||'version not detected')} · ${item.cases.length} casos</p></div><span class="optional-badge">${new Date(item.last_tested_at*1000).toLocaleDateString()}</span></article>`).join(''):'<div class="empty"><p>The matrix appears after the first update.</p></div>'}catch(error){$('#matrix-list').innerHTML=`<div class="warnings">${escapeHtml(error.message)}</div>`}});$('#close-matrix').addEventListener('click',()=>$('#matrix-dialog').close());
+$('#open-drafts').addEventListener('click',openDraftsDialog);$('#close-drafts').addEventListener('click',()=>$('#drafts-dialog').close());$('#save-template').addEventListener('click',saveTemplate);$('#save-procedures').addEventListener('click',saveProcedures);$('#load-procedures-example').addEventListener('click',loadProceduresExample);$('#open-matrix').addEventListener('click',async()=>{$('#matrix-dialog').showModal();$('#matrix-list').innerHTML='<div class="skeleton"></div>';try{const data=await getJson('/api/device-matrix');$('#matrix-list').innerHTML=data.matrix.length?data.matrix.map(item=>`<article class="history-item"><div><strong>${escapeHtml(item.device_name||item.device_id)}</strong><p>${escapeHtml(item.platform)} · ${escapeHtml(item.version||'version not detected')} · ${item.cases.length} casos</p></div><span class="optional-badge">${new Date(item.last_tested_at*1000).toLocaleDateString()}</span></article>`).join(''):'<div class="empty"><p>The matrix appears after the first update.</p></div>'}catch(error){$('#matrix-list').innerHTML=`<div class="warnings">${escapeHtml(error.message)}</div>`}});$('#close-matrix').addEventListener('click',()=>$('#matrix-dialog').close());
 $('#appium-screen').addEventListener('pointerdown',event=>{event.preventDefault();appiumPointer=appiumPoint(event);event.currentTarget.setPointerCapture(event.pointerId)});$('#appium-screen').addEventListener('pointerup',finishAppiumGesture);$('#appium-screen').addEventListener('pointercancel',()=>{appiumPointer=null});
 $('#appium-send-text').addEventListener('click',sendAppiumText);$('#appium-text').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();sendAppiumText()}});
 $('#open-settings').addEventListener('click',openSettings);$('#close-settings').addEventListener('click',closeSettings);$('#cancel-settings').addEventListener('click',closeSettings);$('#settings-form').addEventListener('submit',saveSettings);

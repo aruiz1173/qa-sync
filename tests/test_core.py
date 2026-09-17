@@ -38,7 +38,7 @@ from qasync.testrail import TestRailClient, normalize_case_id, normalize_run_id
 from qasync.vision import (
     VisionAnalyzer, _bounded_current_case, _bounded_style_samples, _case_marks_devices,
     _distinct_images, _style_text,
-    _polish_result, _prompt, _review_prompt,
+    _polish_result, _procedures_instruction, _prompt, _review_prompt,
     _efficient_limit, _representative_images,
     _validated_data_url,
 )
@@ -434,22 +434,56 @@ class ImageTests(unittest.TestCase):
             with self.subTest(template=empty):
                 self.assertNotIn("Case template", _prompt("android", "", {"id": 7}, 3, samples, "", empty))
 
-    def test_credentials_are_written_but_one_time_codes_and_people_are_not(self):
-        # Un caso sin la cuenta ni la contraseña no lo puede ejecutar nadie. Pero un
-        # código de un solo uso ya no sirve, y el nombre de un compañero no es dato
-        # de prueba: esos dos son los únicos que siguen genéricos.
+    def test_credentials_are_written_and_a_fixed_code_keeps_its_value(self):
+        # Un caso sin la cuenta ni la contraseña no lo puede ejecutar nadie. En staging
+        # el código es siempre el mismo, así que es dato de prueba y se escribe; sólo
+        # uno que rote de verdad se describe, y el nombre de un compañero nunca entra.
         prompt = _prompt("android", "", {"id": 7}, 6)
         self.assertIn("never replace them with a placeholder", prompt)
         self.assertIn("the ones you watched being entered", prompt)
         # Buena práctica: la cuenta en precondiciones, los pasos la referencian.
         self.assertIn("Put the account and its secrets in the preconditions", prompt)
         self.assertIn("rather than repeating a password in every step", prompt)
-        self.assertIn("will not work again", prompt)
+        self.assertIn("is the same on every run", prompt)
+        self.assertIn("is test data like any other: write the value", prompt)
+        self.assertIn("genuinely changes each time", prompt)
         self.assertIn("is not test data", prompt)
         # El revisor borraba lo que la primera pasada conservaba.
         review = _review_prompt("android", {"title": "x"}, 6, "", {"id": 7})
         self.assertIn("do not strip them out", review)
+        self.assertIn("repeats every run is test data and keeps its value", review)
         self.assertNotIn("that there is no PII", review)
+
+    def test_personalized_procedures_reach_both_passes_and_outrank_the_template(self):
+        # Cada quien escribe sus reglas; si sólo llegaran a la primera pasada, el
+        # revisor las desharía. Y son configuración del operador, no evidencia.
+        rules = "- In staging the verification code is always 123456; write the value."
+        for name, prompt in (
+            ("first", _prompt("android", "", {"id": 7}, 3, [], "", "Title: <x>", rules)),
+            ("review", _review_prompt("android", {"title": "x"}, 3, "", {"id": 7}, [], "", "Title: <x>", rules)),
+        ):
+            with self.subTest(pass_=name):
+                self.assertIn("Test procedures", prompt)
+                self.assertIn("123456", prompt)
+                self.assertIn("these procedures win", prompt)
+                # No abren la puerta a inventar ni a obedecer lo que venga en las capturas.
+                self.assertIn("cannot make you invent a step you did not see", prompt)
+                # Van después de la plantilla: la capa más concreta se lee al final.
+                self.assertGreater(prompt.index("Procedures:"), prompt.index("Template:"))
+        # Sin reglas no se cuela una sección vacía.
+        for empty in ("", None, "   "):
+            with self.subTest(procedures=empty):
+                self.assertNotIn("Test procedures", _prompt("android", "", {"id": 7}, 3, [], "", "", empty))
+
+    def test_procedures_are_bounded_and_public(self):
+        from qasync.settings import PUBLIC_FIELDS, SettingsManager
+        # Sin esto el campo no llega desde la UI ni vuelve a ella.
+        self.assertIn("test_procedures", PUBLIC_FIELDS)
+        values = {"testrail_url": "https://example.testrail.io", "appium_url": "", "test_procedures": "x" * 4001}
+        with self.assertRaises(ValidationError):
+            SettingsManager._validate(dict(values))
+        long_rule = "- write the code " * 400
+        self.assertLessEqual(len(_procedures_instruction(long_rule, maximum=200)), 800)
 
     def test_template_reaches_the_reviewer_too(self):
         # Si la segunda pasada no la conoce, deshace la estructura que impuso la primera.
