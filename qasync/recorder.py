@@ -714,6 +714,7 @@ class RecorderManager:
             and len(session.frames) < session.max_frames
             and time.time() - session.started_at < self.max_duration
         ):
+            cycle_start = time.time()
             try:
                 image = self._capture(session)
                 recovered = connection_failures > 0
@@ -738,7 +739,10 @@ class RecorderManager:
                 session.error = str(exc)
                 session.stop_event.set()
                 break
-            session.capture_event.wait(session.interval)
+            # Se descuenta lo que ya costó el ciclo: la captura y el volcado de
+            # elementos tardan segundos en un dispositivo lento, y sumarles el
+            # intervalo completo convertía una cadencia pedida de 1.25 s en una de 5 s.
+            session.capture_event.wait(max(0.0, session.interval - (time.time() - cycle_start)))
             session.capture_event.clear()
         session.stop_event.set()
         self._stop_action_observer(session)

@@ -1000,6 +1000,35 @@ iPhone 16 Simulator (18.1) (AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE)
             manager._set_show_touches("otro", True)
             manager._set_show_touches("otro", False)
 
+    def test_capture_interval_counts_the_work_not_only_the_idle_time(self):
+        # En un dispositivo lento la captura y el volcado de elementos tardan segundos;
+        # sumarles el intervalo completo convertía 1.25 s pedidos en un ciclo de 5 s.
+        manager = RecorderManager(interval=1.25, max_frames=2)
+        waits = []
+        with tempfile.TemporaryDirectory() as directory:
+            session = RecordingSession("a" * 32, "android", "device", Path(directory), 1.25, 2)
+
+            def slow_capture(_session):
+                time.sleep(0.4)
+                return b"\x89PNG\r\n\x1a\n" + bytes(len(waits))
+
+            original_wait = session.capture_event.wait
+
+            def record_wait(timeout=None):
+                waits.append(timeout)
+                return original_wait(0)
+
+            session.capture_event.wait = record_wait
+            with patch.object(manager, "_capture", slow_capture), \
+                 patch.object(manager, "_store_frame", lambda s, i: s.frames.append(Path("f")) or True), \
+                 patch.object(manager, "_persist", lambda s: None), \
+                 patch.object(manager, "_stop_action_observer", lambda s: None):
+                manager._record(session)
+        self.assertTrue(waits, "el bucle debe esperar entre capturas")
+        # 1.25 pedidos menos ~0.4 ya gastados: la espera restante, no 1.25 completos.
+        self.assertLess(waits[0], 1.0)
+        self.assertGreater(waits[0], 0.5)
+
     def test_stopped_session_duration_does_not_grow_with_the_clock(self):
         manager = RecorderManager(max_duration=900)
         with tempfile.TemporaryDirectory() as directory:

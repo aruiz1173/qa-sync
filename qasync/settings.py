@@ -219,8 +219,11 @@ class SettingsManager:
             parsed = int(value)
         except (TypeError, ValueError) as exc:
             raise ValidationError("The screen limit must be a number.") from exc
-        if not 2 <= parsed <= 30:
-            raise ValidationError("The screen limit must be between 2 and 30.")
+        # El techo alto es deliberado: una tablet lenta gasta unos 5 s por pantalla
+        # guardada, así que 16 cortaba el recorrido cerca del minuto y medio. El
+        # coste real lo sigue gobernando la calidad de visión, no este número.
+        if not 2 <= parsed <= 200:
+            raise ValidationError("The screen limit must be between 2 and 200.")
         return parsed
 
     @staticmethod
