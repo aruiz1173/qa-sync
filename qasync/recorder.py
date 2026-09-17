@@ -21,7 +21,8 @@ from typing import Any
 from .appium import AppiumClient
 from .devices import (
     adb_endpoint_result, parse_adb_devices, parse_adb_mdns_services, parse_adb_tcpip_result,
-    parse_android_ip, parse_ios_devices, parse_scrcpy_major, parse_xctrace_physical_devices,
+    parse_android_ip, parse_ios_devices, parse_rotation, parse_scrcpy_major,
+    parse_touch_bounds, parse_xctrace_physical_devices,
 )
 from .errors import ExternalServiceError, ValidationError
 from .evidence import EvidenceCipher, MAGIC as ENCRYPTED_MAGIC
@@ -1020,6 +1021,20 @@ class RecorderManager:
             "resolution": size.stdout.decode(errors="replace").replace("Physical size:", "").strip()[:40] if size.returncode == 0 else "",
             "app_id": package[:180],
         }
+        # El digitalizador no sigue a la rotación: en una tablet en landscape los
+        # toques llegan en coordenadas portrait. Sin el rango y la rotación no hay
+        # forma de cruzarlos con una captura, y el análisis no puede atribuirlos.
+        try:
+            events = _run([executable, "-s", session.device_id, "shell", "getevent", "-pl"], timeout=10)
+            window = _run([executable, "-s", session.device_id, "shell", "dumpsys", "window"], timeout=10)
+        except ExternalServiceError:
+            events = window = None
+        if events is not None and events.returncode == 0:
+            max_x, max_y = parse_touch_bounds(events.stdout.decode(errors="replace"))
+            if max_x and max_y:
+                environment["touch_space"] = f"{max_x + 1}x{max_y + 1} (device-native, does not follow rotation)"
+        if window is not None and window.returncode == 0:
+            environment["screen_rotation"] = f"{parse_rotation(window.stdout.decode(errors='replace'))} degrees"
         if package:
             try:
                 package_info = _run([executable, "-s", session.device_id, "shell", "dumpsys", "package", package], timeout=8)

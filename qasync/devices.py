@@ -58,6 +58,34 @@ def parse_adb_mdns_services(output: str) -> list[dict[str, str]]:
     return services
 
 
+def parse_touch_bounds(output: str) -> tuple[int, int]:
+    """Rango del digitalizador, de `getevent -pl`.
+
+    Es el espacio nativo del panel y no sigue a la rotación: en una tablet en
+    landscape los toques llegan en coordenadas portrait, así que sin este rango no
+    hay forma de cruzarlos con una captura.
+    """
+    x = re.search(r"ABS_MT_POSITION_X[^\n]*?max (\d+)", output)
+    y = re.search(r"ABS_MT_POSITION_Y[^\n]*?max (\d+)", output)
+    if not x or not y:
+        return 0, 0
+    return int(x.group(1)), int(y.group(1))
+
+
+def parse_rotation(output: str) -> int:
+    """Rotación de la pantalla en grados, de `dumpsys window`.
+
+    El mismo volcado la escribe de dos formas: `mRotation=ROTATION_90` en grados y
+    `mRotation=1` como índice. Leer sólo un dígito de la primera daba 9.
+    """
+    for raw in re.findall(r"m(?:Display)?Rotation=(ROTATION_\d+|\d+)", output):
+        value = int(raw.removeprefix("ROTATION_"))
+        degrees = value * 90 if value <= 3 else value
+        if degrees in {0, 90, 180, 270}:
+            return degrees
+    return 0
+
+
 def parse_android_ip(output: str) -> str:
     """Wi-Fi address of a device, read from `ip route` or `ip addr`.
 

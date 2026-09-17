@@ -27,7 +27,10 @@ from qasync.executables import describe_untrusted, file_sha256, pinned_hashes, t
 from qasync.history import HistoryStore
 from qasync.http_client import request_json
 from qasync.recorder import RecorderManager, RecordingSession, _redacted_label, parse_adb_devices, parse_ios_devices, parse_xctrace_physical_devices
-from qasync.devices import adb_endpoint_result, parse_adb_mdns_services, parse_adb_tcpip_result, parse_android_ip, parse_scrcpy_major
+from qasync.devices import (
+    adb_endpoint_result, parse_adb_mdns_services, parse_adb_tcpip_result, parse_android_ip,
+    parse_rotation, parse_scrcpy_major, parse_touch_bounds,
+)
 from qasync.service import DraftStore, Proposal, ProposalStore, QASyncService
 from qasync.settings import SettingsManager, _validated_service_url
 from qasync.state import private_dir, private_file, state_root
@@ -735,6 +738,25 @@ ABC123 unauthorized usb:1-2 transport_id:2
         for error in errors:
             with self.subTest(error=error):
                 self.assertRegex(error.lower(), r"^(android|ios)\b")
+
+    def test_reads_touch_space_and_rotation(self):
+        # El digitalizador no sigue a la rotación: en landscape los toques llegan en
+        # coordenadas portrait, y sin estos dos datos no se pueden cruzar con la captura.
+        sample = (
+            "    ABS_MT_POSITION_X     : value 0, min 0, max 1599, fuzz 0, flat 0\n"
+            "    ABS_MT_POSITION_Y     : value 0, min 0, max 2559, fuzz 0, flat 0\n"
+        )
+        self.assertEqual(parse_touch_bounds(sample), (1599, 2559))
+        self.assertEqual(parse_touch_bounds("sin rangos"), (0, 0))
+        # El mismo volcado escribe la rotación en grados y como índice; leer un solo
+        # dígito de ROTATION_90 daba 9.
+        self.assertEqual(parse_rotation("mRotation=ROTATION_90"), 90)
+        self.assertEqual(parse_rotation("mRotation=1"), 90)
+        self.assertEqual(parse_rotation("mRotation=3"), 270)
+        self.assertEqual(parse_rotation("mRotation=ROTATION_0"), 0)
+        # Un valor inválido no gana sobre el siguiente que sí sirve.
+        self.assertEqual(parse_rotation("mRotation=undefined mDisplayRotation=ROTATION_270"), 270)
+        self.assertEqual(parse_rotation("sin rotación"), 0)
 
     def test_reads_private_wifi_address_only(self):
         self.assertEqual(parse_android_ip(
