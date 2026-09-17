@@ -434,16 +434,21 @@ class ImageTests(unittest.TestCase):
             with self.subTest(template=empty):
                 self.assertNotIn("Case template", _prompt("android", "", {"id": 7}, 3, samples, "", empty))
 
-    def test_documented_test_data_survives_but_screen_pii_does_not(self):
-        # El caso ya documenta la cuenta de staging a propósito: borrarla lo dejaba
-        # sin poder ejecutarse. Lo que se lee en las capturas es otra cosa.
+    def test_credentials_are_written_but_one_time_codes_and_people_are_not(self):
+        # Un caso sin la cuenta ni la contraseña no lo puede ejecutar nadie. Pero un
+        # código de un solo uso ya no sirve, y el nombre de un compañero no es dato
+        # de prueba: esos dos son los únicos que siguen genéricos.
         prompt = _prompt("android", "", {"id": 7}, 6)
-        self.assertIn("keep it verbatim", prompt)
-        self.assertIn("never replace it with a placeholder", prompt)
-        self.assertIn("do not transcribe personal data", prompt)
+        self.assertIn("never replace them with a placeholder", prompt)
+        self.assertIn("the ones you watched being entered", prompt)
+        # Buena práctica: la cuenta en precondiciones, los pasos la referencian.
+        self.assertIn("Put the account and its secrets in the preconditions", prompt)
+        self.assertIn("rather than repeating a password in every step", prompt)
+        self.assertIn("will not work again", prompt)
+        self.assertIn("is not test data", prompt)
         # El revisor borraba lo que la primera pasada conservaba.
         review = _review_prompt("android", {"title": "x"}, 6, "", {"id": 7})
-        self.assertIn("verbatim", review)
+        self.assertIn("do not strip them out", review)
         self.assertNotIn("that there is no PII", review)
 
     def test_template_reaches_the_reviewer_too(self):
