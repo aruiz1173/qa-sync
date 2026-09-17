@@ -36,7 +36,7 @@ from qasync.vision import (
     VisionAnalyzer, _bounded_current_case, _bounded_style_samples, _case_marks_devices,
     _distinct_images, _style_text,
     _polish_result, _prompt, _review_prompt,
-    _representative_images,
+    _efficient_limit, _representative_images,
     _validated_data_url,
 )
 
@@ -472,12 +472,30 @@ class ImageTests(unittest.TestCase):
         second = {"type": "image/png", "data": base64.b64encode(b"second").decode()}
         self.assertEqual(_distinct_images([first, first, second, first]), [first, second, first])
 
+    def test_efficient_sample_scales_with_the_journey(self):
+        # Un tope fijo de 8 se calibró para un presupuesto de 16 pantallas. Con 60 o
+        # 200 deja de describir el recorrido, que es justo lo que el modo debe hacer.
+        self.assertEqual(_efficient_limit(14), 8, "los recorridos cortos no cambian")
+        self.assertEqual(_efficient_limit(16), 8)
+        self.assertEqual(_efficient_limit(30), 15)
+        self.assertEqual(_efficient_limit(200), 100)
+        # Nunca menos de ocho, aunque la mitad sea menos.
+        self.assertEqual(_efficient_limit(4), 8)
+        # Y si hay menos pantallas que el mínimo, se mandan todas.
+        self.assertEqual(len(_representative_images([{"data": str(i)} for i in range(5)])), 5)
+        self.assertEqual(len(_representative_images([{"data": str(i)} for i in range(60)])), 30)
+
     def test_efficient_mode_keeps_temporal_span(self):
         images = [{"data": str(index)} for index in range(20)]
         selected = _representative_images(images)
-        self.assertEqual(len(selected), 8)
+        self.assertEqual(len(selected), 10, "la mitad del recorrido")
+        # Recortar nunca debe perder el primer ni el último estado: sin ellos no se
+        # sabe de dónde salió el recorrido ni dónde terminó.
         self.assertEqual(selected[0], images[0])
         self.assertEqual(selected[-1], images[-1])
+        # Y lo que queda va en orden, sin repetidos.
+        self.assertEqual(selected, sorted(selected, key=lambda item: int(item["data"])))
+        self.assertEqual(len({item["data"] for item in selected}), len(selected))
 
     @patch.object(VisionAnalyzer, "_call_provider")
     def test_efficient_mode_uses_one_call_and_eight_frames(self, call_provider):

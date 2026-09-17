@@ -353,8 +353,19 @@ def _distinct_images(images: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return distinct
 
 
-def _representative_images(images: list[dict[str, Any]], limit: int = 8) -> list[dict[str, Any]]:
+def _efficient_limit(count: int, floor: int = 8) -> int:
+    """How many screens efficient mode keeps: half the journey, never fewer than eight.
+
+    A fixed ceiling was calibrated for a sixteen-screen budget. Once the budget can
+    reach two hundred, that same eight is a four per cent sample and the result stops
+    describing the journey at all, which is the opposite of what the mode is for.
+    """
+    return max(floor, count // 2)
+
+
+def _representative_images(images: list[dict[str, Any]], limit: int | None = None) -> list[dict[str, Any]]:
     """Keep the complete temporal span while reducing image usage in efficient mode."""
+    limit = _efficient_limit(len(images)) if limit is None else limit
     if len(images) <= limit:
         return images
     indices = [round(position * (len(images) - 1) / (limit - 1)) for position in range(limit)]
