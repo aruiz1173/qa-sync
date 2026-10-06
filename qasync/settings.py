@@ -6,6 +6,8 @@ import os
 import re
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -26,15 +28,23 @@ PUBLIC_FIELDS = {
     "testrail_android_value",
     "testrail_ios_value",
     "max_images",
+    "ai_max_images",
     "max_recording_seconds",
     "capture_interval",
     "hourly_rate_usd",
     "case_template",
     "test_procedures",
+    "min_apply_confidence",
+    "min_verification_confidence",
+    "capture_retention_hours",
+    "cache_retention_hours",
+    "draft_retention_days",
+    "history_retention_days",
     "appium_url",
     "ios_bundle_id",
     "appium_capabilities_json",
     "ios_devices_json",
+    "developer_dir",
     "write_mode",
     "vision_provider",
     "codex_model",
@@ -68,12 +78,88 @@ def _validated_service_url(raw: object, label: str, example: str) -> str:
 
 
 class SettingsManager:
+    SETTINGS_SCHEMA_VERSION = 1
+    PROFILES_SCHEMA_VERSION = 1
+
     def __init__(self, path: Path | None = None):
         configured = os.getenv("QA_SYNC_SETTINGS_FILE", "").strip()
         self.path = (path or (Path(configured) if configured else state_root() / "settings.json")).resolve()
         self.fallback_secrets_path = self.path.with_name("secrets.json")
         self.dpapi_secrets_path = self.path.with_name("secrets.dpapi.json")
         self.profiles_path = self.path.with_name("profiles.json")
+        self.workspace_path = self.path.with_name("workspace.json")
+        self._workspace_lock = threading.RLock()
+
+    def workspace(self) -> dict[str, Any]:
+        """Non-secret local navigation and device preferences, shared across browsers."""
+        with self._workspace_lock:
+            raw = self._read(self.workspace_path)
+            if not raw:
+                return {"project_id": "", "runs": {}, "choices": {}}
+            if raw.get("schema_version") != 1 or not isinstance(raw.get("runs"), dict) or not isinstance(raw.get("choices"), dict):
+                raise ValidationError("This workspace preferences file is unsupported. It was left unchanged.")
+            return {"project_id": str(raw.get("project_id", "")),
+                    "runs": raw["runs"], "choices": raw["choices"]}
+
+    def save_workspace(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Store only choices safe to reuse; never context, deep links or reset-data."""
+        with self._workspace_lock:
+            saved = self.workspace()
+            def numeric_id(field: str) -> str:
+                value = str(payload.get(field, "")).strip()
+                if value and (not value.isascii() or not value.isdigit() or int(value) < 1):
+                    raise ValidationError(f"{field} must be a positive TestRail ID.")
+                return value
+            project_id = numeric_id("project_id")
+            run_id = numeric_id("run_id")
+            suite_id = numeric_id("suite_id")
+            if not project_id:
+                raise ValidationError("Select a project before saving workspace preferences.")
+            saved["project_id"] = project_id
+            if run_id:
+                saved["runs"][project_id] = run_id
+            if payload.get("choice") is not None:
+                if not run_id or not isinstance(payload["choice"], dict):
+                    raise ValidationError("A device preference needs a run and a choice object.")
+                choice = payload["choice"]
+                platform = str(choice.get("platform", ""))
+                if platform not in {"android", "ios"}:
+                    raise ValidationError("Choose Android or iOS.")
+                device_id = str(choice.get("device_id", ""))
+                target_config = str(choice.get("target_config", ""))
+                if len(device_id) > 200 or len(target_config) > 200:
+                    raise ValidationError("A saved device preference is too long.")
+                value = {"platform": platform, "device_id": device_id,
+                         "target_config": target_config, "suite_id": suite_id}
+                saved["choices"][f"run:{project_id}:{run_id}"] = value
+                if suite_id:
+                    saved["choices"][f"suite:{project_id}:{suite_id}"] = value
+            saved["runs"] = dict(list(saved["runs"].items())[-100:])
+            saved["choices"] = dict(list(saved["choices"].items())[-300:])
+            self._write(self.workspace_path, {"schema_version": 1, **saved})
+            return saved
+
+    def forget_workspace_device(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Forget a run/suite device without discarding platform or target configuration."""
+        with self._workspace_lock:
+            saved = self.workspace()
+            ids = {}
+            for field in ("project_id", "run_id", "suite_id"):
+                value = str(payload.get(field, "")).strip()
+                if value and (not value.isascii() or not value.isdigit() or int(value) < 1):
+                    raise ValidationError(f"{field} must be a positive TestRail ID.")
+                ids[field] = value
+            if not ids["project_id"] or not ids["run_id"]:
+                raise ValidationError("Select a run before forgetting its device.")
+            keys = [f"run:{ids['project_id']}:{ids['run_id']}"]
+            if ids["suite_id"]:
+                keys.append(f"suite:{ids['project_id']}:{ids['suite_id']}")
+            for key in keys:
+                choice = saved["choices"].get(key)
+                if isinstance(choice, dict):
+                    saved["choices"][key] = {**choice, "device_id": ""}
+            self._write(self.workspace_path, {"schema_version": 1, **saved})
+            return saved
 
     @property
     def uses_keychain(self) -> bool:
@@ -86,7 +172,7 @@ class SettingsManager:
     def load(self) -> Config:
         base = Config.from_env()
         values = asdict(base)
-        saved = self._read(self.path)
+        saved = self._settings_values()
         for key in PUBLIC_FIELDS:
             if key in saved:
                 values[key] = saved[key]
@@ -111,11 +197,18 @@ class SettingsManager:
                 fallback["evidence_key"] = values["evidence_key"]
                 self._write(self.fallback_secrets_path, fallback)
         values["max_images"] = self._max_images(values.get("max_images", 16))
+        values["ai_max_images"] = self._ai_max_images(values.get("ai_max_images", 40))
         values["max_recording_seconds"] = self._max_recording_seconds(
             values.get("max_recording_seconds", 900)
         )
         values["capture_interval"] = self._capture_interval(values.get("capture_interval", 1.25))
         values["hourly_rate_usd"] = self._hourly_rate(values.get("hourly_rate_usd", 0))
+        values["min_apply_confidence"] = self._bounded_float(values.get("min_apply_confidence", 0), 0, 1, "minimum confidence")
+        values["min_verification_confidence"] = self._bounded_float(values.get("min_verification_confidence", 0.8), 0, 1, "verification confidence")
+        values["capture_retention_hours"] = self._bounded_int(values.get("capture_retention_hours", 1), 1, 24 * 365, "capture_retention_hours")
+        values["cache_retention_hours"] = self._bounded_int(values.get("cache_retention_hours", 24), 1, 24 * 365, "cache_retention_hours")
+        values["draft_retention_days"] = self._bounded_int(values.get("draft_retention_days", 0), 0, 3650, "draft_retention_days")
+        values["history_retention_days"] = self._bounded_int(values.get("history_retention_days", 0), 0, 3650, "history_retention_days")
         self._validate(values)
         return Config(**values)
 
@@ -140,12 +233,20 @@ class SettingsManager:
             value: Any = payload[key]
             if key == "max_images":
                 value = self._max_images(value)
+            elif key == "ai_max_images":
+                value = self._ai_max_images(value)
             elif key == "max_recording_seconds":
                 value = self._max_recording_seconds(value)
             elif key == "capture_interval":
                 value = self._capture_interval(value)
             elif key == "hourly_rate_usd":
                 value = self._hourly_rate(value)
+            elif key in {"min_apply_confidence", "min_verification_confidence"}:
+                value = self._bounded_float(value, 0, 1, key.replace("_", " "))
+            elif key in {"capture_retention_hours", "cache_retention_hours"}:
+                value = self._bounded_int(value, 1, 24 * 365, key)
+            elif key in {"draft_retention_days", "history_retention_days"}:
+                value = self._bounded_int(value, 0, 3650, key)
             elif key == "allow_provider_fallback":
                 value = value is True or str(value).strip().lower() in {"1", "true", "yes", "on"}
             else:
@@ -156,7 +257,7 @@ class SettingsManager:
         values.update(saved)
         if not values.get("vision_provider"):
             raise ValidationError("Pick Codex, Claude or the OpenAI API as the vision provider.")
-        self._write(self.path, saved)
+        self._write(self.path, {"schema_version": self.SETTINGS_SCHEMA_VERSION, "settings": saved})
 
         fallback = self._read(self.fallback_secrets_path)
         protected = self._read(self.dpapi_secrets_path)
@@ -178,8 +279,7 @@ class SettingsManager:
         return Config(**values)
 
     def profiles(self) -> dict[str, Any]:
-        raw = self._read(self.profiles_path)
-        profiles = raw.get("profiles") if isinstance(raw.get("profiles"), dict) else {}
+        profiles = self._profiles_values()
         return {"profiles": [{
             "name": name,
             "project_id": str(value.get("testrail_project_id", "")),
@@ -190,28 +290,25 @@ class SettingsManager:
         clean_name = name.strip()
         if not 1 <= len(clean_name) <= 80 or not re.fullmatch(r"[\w .()/-]+", clean_name, re.UNICODE):
             raise ValidationError("The profile name contains characters that are not allowed.")
-        raw = self._read(self.profiles_path)
-        profiles = raw.get("profiles") if isinstance(raw.get("profiles"), dict) else {}
+        profiles = self._profiles_values()
         values = asdict(current)
         profiles[clean_name] = {key: values[key] for key in PUBLIC_FIELDS}
-        self._write(self.profiles_path, {"version": 1, "profiles": profiles})
+        self._write(self.profiles_path, {"schema_version": self.PROFILES_SCHEMA_VERSION, "profiles": profiles})
         return self.profiles()
 
     def activate_profile(self, name: str, current: Config) -> Config:
-        raw = self._read(self.profiles_path)
-        profiles = raw.get("profiles") if isinstance(raw.get("profiles"), dict) else {}
+        profiles = self._profiles_values()
         profile = profiles.get(name)
         if not isinstance(profile, dict):
             raise ValidationError("That profile does not exist.")
         return self.save(profile, current)
 
     def delete_profile(self, name: str) -> dict[str, Any]:
-        raw = self._read(self.profiles_path)
-        profiles = raw.get("profiles") if isinstance(raw.get("profiles"), dict) else {}
+        profiles = self._profiles_values()
         if name not in profiles:
             raise ValidationError("That profile does not exist.")
         del profiles[name]
-        self._write(self.profiles_path, {"version": 1, "profiles": profiles})
+        self._write(self.profiles_path, {"schema_version": self.PROFILES_SCHEMA_VERSION, "profiles": profiles})
         return self.profiles()
 
     @staticmethod
@@ -250,6 +347,36 @@ class SettingsManager:
         if not 0.5 <= parsed <= 10:
             raise ValidationError("The capture interval must be between 0.5 and 10 seconds.")
         return round(parsed, 2)
+
+    @staticmethod
+    def _bounded_float(value: Any, minimum: float, maximum: float, label: str) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(f"The {label} must be a number.") from exc
+        if not minimum <= parsed <= maximum:
+            raise ValidationError(f"The {label} must be between {minimum} and {maximum}.")
+        return round(parsed, 3)
+
+    @staticmethod
+    def _bounded_int(value: Any, minimum: int, maximum: int, label: str) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(f"{label} must be a whole number.") from exc
+        if not minimum <= parsed <= maximum:
+            raise ValidationError(f"{label} must be between {minimum} and {maximum}.")
+        return parsed
+
+    @staticmethod
+    def _ai_max_images(value: Any) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError("The AI screen budget must be a whole number.") from exc
+        if not 1 <= parsed <= 200:
+            raise ValidationError("The AI screen budget must be between 1 and 200.")
+        return parsed
 
     @staticmethod
     def _max_recording_seconds(value: Any) -> int:
@@ -317,6 +444,16 @@ class SettingsManager:
         if ios_devices and not appium_url:
             raise ValidationError("Configura Appium antes de agregar dispositivos iOS remotos.")
         values["ios_devices_json"] = json.dumps(ios_devices, separators=(",", ":"), ensure_ascii=False)
+        developer_dir = str(values.get("developer_dir", "") or "").strip()
+        if developer_dir:
+            path = Path(developer_dir).expanduser()
+            if not path.is_dir() or not (path / "usr" / "bin" / "xcodebuild").is_file() or not (
+                path / "Platforms" / "iPhoneSimulator.platform"
+            ).is_dir():
+                raise ValidationError("Xcode Developer directory must contain xcodebuild and iPhoneSimulator.platform.")
+            values["developer_dir"] = str(path.resolve())
+        else:
+            values["developer_dir"] = ""
         write_mode = str(values.get("write_mode", "confirm")).strip().lower()
         if write_mode not in {"confirm", "review_only"}:
             raise ValidationError("El modo de escritura debe ser confirm o review_only.")
@@ -341,12 +478,53 @@ class SettingsManager:
             if not str(values.get(field, "")).startswith("custom_"):
                 raise ValidationError(f"{field} must start with custom_.")
 
+    def _profiles_values(self) -> dict[str, Any]:
+        raw = self._read(self.profiles_path)
+        if not raw:
+            return {}
+        # `version` was used by the first profile implementation; accept and
+        # atomically upgrade it before using the common schema name.
+        version = raw.get("schema_version", raw.get("version"))
+        profiles = raw.get("profiles")
+        if not isinstance(profiles, dict):
+            raise ValidationError("The Profiles file has no valid profiles object.")
+        if version not in (None, self.PROFILES_SCHEMA_VERSION):
+            raise ValidationError("This Profiles file was created by a newer QA Sync version. It was left unchanged.")
+        if raw.get("schema_version") != self.PROFILES_SCHEMA_VERSION:
+            self._write(self.profiles_path, {"schema_version": self.PROFILES_SCHEMA_VERSION, "profiles": profiles})
+        return profiles
+
+    def _settings_values(self) -> dict[str, Any]:
+        """Read legacy flat settings once, then keep an explicit migration boundary."""
+        raw = self._read(self.path)
+        if not raw:
+            return {}
+        if "schema_version" not in raw:
+            # All older releases stored public Settings as a flat object. Rewrite it
+            # atomically in the first versioned shape without changing any value.
+            self._write(self.path, {"schema_version": self.SETTINGS_SCHEMA_VERSION, "settings": raw})
+            return raw
+        if raw.get("schema_version") != self.SETTINGS_SCHEMA_VERSION:
+            raise ValidationError("This Settings file was created by a newer QA Sync version. It was left unchanged.")
+        settings = raw.get("settings")
+        if not isinstance(settings, dict):
+            raise ValidationError("The versioned Settings file has no valid settings object.")
+        return settings
+
     @staticmethod
     def _read(path: Path) -> dict[str, Any]:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else {}
-        except (OSError, json.JSONDecodeError):
+        except json.JSONDecodeError:
+            backup = path.with_name(f"{path.stem}.corrupt-{int(time.time())}{path.suffix}")
+            try:
+                path.replace(backup)
+                private_file(backup)
+            except OSError:
+                pass
+            return {}
+        except OSError:
             return {}
 
     @staticmethod

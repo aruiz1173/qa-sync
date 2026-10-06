@@ -6,12 +6,13 @@ import mimetypes
 import os
 import socket
 import threading
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from .errors import QASyncError, ValidationError
+from .errors import ConflictError, QASyncError, ValidationError
 from .service import QASyncService
 from .settings import SettingsManager
 from .state import private_dir, private_file, state_root
@@ -19,6 +20,9 @@ from .state import private_dir, private_file, state_root
 STATIC_DIR = Path(__file__).with_name("static")
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 MAX_ACTIVE_REQUESTS = 32
+# Cambia únicamente cuando el proceso HTTP vuelve a arrancar. La interfaz lo usa
+# para descartar formularios que sobrevivieron a un reinicio del servidor.
+SERVER_INSTANCE_ID = uuid.uuid4().hex
 
 
 def allowed_host(value: str) -> bool:
@@ -97,13 +101,24 @@ class AppHandler(BaseHTTPRequestHandler):
                     result = {
                         **self.service.config.public_status(),
                         "capture": self.service.recorder.capabilities(),
+                        "server_instance_id": SERVER_INSTANCE_ID,
                     }
                 elif path == "/api/devices":
                     result = self.service.devices()
                 elif path == "/api/providers":
                     result = self.service.providers()
+                elif path == "/api/preflight":
+                    result = self.service.preflight()
+                elif path == "/api/trusted-tools":
+                    result = self.service.trusted_tools()
+                elif path == "/api/analysis-cache":
+                    result = self.service.cache_status()
+                elif path == "/api/quality":
+                    result = self.service.quality_metrics()
                 elif path == "/api/audit":
                     result = self.service.audit_report()
+                elif path == "/api/support-report":
+                    result = self.service.support_report()
                 elif path == "/api/spend":
                     result = self.service.spend()
                 elif path == "/api/device-matrix":
@@ -112,8 +127,12 @@ class AppHandler(BaseHTTPRequestHandler):
                     result = self.settings.public(self.service.config)
                 elif path == "/api/profiles":
                     result = self.settings.profiles()
+                elif path == "/api/workspace":
+                    result = self.settings.workspace()
                 elif path == "/api/recovery":
                     result = self.service.recovery()
+                elif path == "/api/deferred":
+                    result = self.service.deferred_list()
                 else:
                     self._json(404, {"error": "Route not found."})
                     return
@@ -160,6 +179,16 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.service.recorder.shutdown()
                 type(self).service = QASyncService(config)
                 result = self.settings.public(config)
+            elif path == "/api/trusted-tools/trust":
+                if self.service.recorder.has_active_sessions():
+                    raise ValidationError("Finish or cancel the recording before changing trusted tools.")
+                result = self.service.trust_tool(payload)
+            elif path == "/api/analysis-cache/clear":
+                if self.service.recorder.has_active_sessions():
+                    raise ValidationError("Finish or cancel the recording before clearing the analysis cache.")
+                result = self.service.clear_analysis_cache()
+            elif path == "/api/quality/feedback":
+                result = self.service.save_feedback(payload)
             elif path == "/api/profile/save":
                 result = self.settings.save_profile(str(payload.get("name", "")), self.service.config)
             elif path == "/api/profile/activate":
@@ -171,6 +200,10 @@ class AppHandler(BaseHTTPRequestHandler):
                 result = self.settings.public(config)
             elif path == "/api/profile/delete":
                 result = self.settings.delete_profile(str(payload.get("name", "")))
+            elif path == "/api/workspace":
+                result = self.settings.save_workspace(payload)
+            elif path == "/api/workspace/forget-device":
+                result = self.settings.forget_workspace_device(payload)
             elif path == "/api/projects":
                 result = self.service.projects()
             elif path == "/api/config/validate":
@@ -189,6 +222,10 @@ class AppHandler(BaseHTTPRequestHandler):
                 result = self.service.case(payload)
             elif path == "/api/device/open":
                 result = self.service.open_device(payload)
+            elif path == "/api/device/android-emulator":
+                result = self.service.launch_android_emulator(payload)
+            elif path == "/api/device/ios-simulator":
+                result = self.service.launch_ios_simulator(payload)
             elif path == "/api/device/close-mirror":
                 result = self.service.close_mirror(payload)
             elif path == "/api/device/android-disconnect":
@@ -205,20 +242,70 @@ class AppHandler(BaseHTTPRequestHandler):
                 result = self.service.recording_status(payload)
             elif path == "/api/record/screenshot":
                 result = self.service.recording_screenshot(payload)
+            elif path == "/api/record/evidence-preview":
+                result = self.service.recording_evidence_preview(payload)
+            elif path == "/api/record/evidence-export":
+                result = self.service.export_recording_evidence(payload)
+            elif path == "/api/record/evidence-import":
+                result = self.service.import_recording_evidence(payload)
+            elif path == "/api/record/locators":
+                result = self.service.recording_locators(payload)
             elif path == "/api/record/action":
                 result = self.service.recording_action(payload)
+            elif path == "/api/execution/start":
+                result = self.service.start_execution(payload)
+            elif path == "/api/execution/status":
+                result = self.service.execution_status(payload)
+            elif path == "/api/execution/verify":
+                result = self.service.verify_execution_step(payload)
+            elif path == "/api/execution/verdict":
+                result = self.service.set_execution_verdict(payload)
+            elif path == "/api/execution/finish":
+                result = self.service.finish_execution(payload)
+            elif path == "/api/execution/cancel":
+                result = self.service.cancel_execution(payload)
+            elif path == "/api/execution/reconcile-publication":
+                result = self.service.reconcile_execution_publication(payload)
+            elif path == "/api/execution/report":
+                result = self.service.execution_report(payload)
             elif path == "/api/record/stop":
                 result = self.service.stop_recording(payload)
             elif path == "/api/record/cancel":
                 result = self.service.cancel_recording(payload)
             elif path == "/api/record/analyze":
                 result = self.service.analyze_recording(payload)
+            elif path == "/api/deferred/add":
+                result = self.service.defer_recording(payload)
+            elif path == "/api/deferred/review":
+                result = self.service.review_deferred(payload)
+            elif path == "/api/deferred/start":
+                result = self.service.start_deferred(payload)
+            elif path == "/api/deferred/pause":
+                result = self.service.pause_deferred()
+            elif path == "/api/deferred/resume":
+                result = self.service.resume_deferred()
+            elif path == "/api/deferred/retry-now":
+                result = self.service.retry_deferred_now(payload)
+            elif path == "/api/deferred/cancel":
+                result = self.service.cancel_deferred()
+            elif path == "/api/deferred/unschedule":
+                result = self.service.unschedule_deferred(payload)
+            elif path == "/api/deferred/move":
+                result = self.service.move_deferred(payload)
+            elif path == "/api/deferred/remove":
+                result = self.service.remove_deferred(payload)
             elif path == "/api/proposal/revise":
                 result = self.service.revise_proposal(payload)
+            elif path == "/api/proposal/get":
+                result = self.service.get_proposal(payload)
             elif path == "/api/draft/save":
                 result = self.service.save_draft(payload)
             elif path == "/api/draft/list":
                 result = self.service.draft_list()
+            elif path == "/api/draft/export":
+                result = self.service.draft_export(payload)
+            elif path == "/api/draft/import":
+                result = self.service.draft_import(payload)
             elif path == "/api/draft/open":
                 result = self.service.open_draft(payload)
             elif path == "/api/draft/delete":
@@ -227,12 +314,16 @@ class AppHandler(BaseHTTPRequestHandler):
                 result = self.service.apply(payload)
             elif path == "/api/history":
                 result = self.service.history_entries(payload)
+            elif path == "/api/history/reconcile":
+                result = self.service.reconcile_pending_update(payload)
             elif path == "/api/rollback":
                 result = self.service.rollback(payload)
             else:
                 self._json(404, {"error": "Route not found."})
                 return
             self._json(200, result)
+        except ConflictError as exc:
+            self._json(409, {"error": str(exc), "code": "proposal_conflict"})
         except QASyncError as exc:
             self._json(400, {"error": str(exc)})
         except Exception:

@@ -12,12 +12,14 @@
   <header class="topbar">
     <div class="product"><span class="product-mark" aria-hidden="true">QS</span><span>QA Sync</span><span class="local-badge">Local</span></div>
     <div class="project-picker"><label for="project-select">Project</label><select id="project-select" disabled><option>Connecting to TestRail</option></select></div>
-    <div class="top-actions"><div id="connection" class="connection"><span></span>Checking configuration</div><button id="open-drafts" class="secondary" type="button">Drafts</button><button id="open-matrix" class="secondary" type="button">Matrix</button><button id="export-audit" class="secondary" type="button">Audit</button><button id="open-settings" class="secondary" type="button">Settings</button></div>
+    <div class="top-actions"><div id="connection" class="connection"><span></span>Checking configuration</div><button id="open-work" class="secondary" type="button">My work</button><button id="open-preflight" class="secondary" type="button">Preflight</button><button id="open-deferred" class="secondary" type="button">AI queue</button><button id="open-drafts" class="secondary" type="button">Drafts</button><button id="open-matrix" class="secondary" type="button">Matrix</button><button id="open-quality" class="secondary" type="button">Quality</button><button id="export-audit" class="secondary" type="button">Audit JSON</button><button id="export-audit-csv" class="secondary" type="button">Audit CSV</button><button id="open-settings" class="secondary" type="button">Settings</button></div>
   </header>
+  <section id="alternate-instance" class="recovery-banner" role="status" hidden><div class="recovery-copy"><strong>Alternate local address</strong><p>This tab is not on the standard QA Sync address. Your local work stays here; check which server you intend to use before switching tabs.</p></div><div class="recovery-actions"><a class="secondary" href="http://127.0.0.1:8787/">Open standard address</a></div></section>
+  <section id="recovery-banner" class="recovery-banner" role="status" aria-live="polite" hidden><div class="recovery-copy"><p id="recovery-kind" class="recovery-kind">LOCAL WORK</p><strong id="recovery-title">Recovered work</strong><p id="recovery-detail"></p></div><div class="recovery-actions"><button id="resume-recovery" class="secondary" type="button" hidden>Continue</button><button id="recovery-all-work" class="secondary" type="button">View all work</button><button id="dismiss-recovery" class="secondary" type="button">Dismiss</button></div></section>
 
   <main class="dashboard">
     <aside class="runs-pane pane">
-      <div class="pane-head"><div><p class="overline">TestRail</p><h1>Runs</h1></div><button id="refresh-runs" class="icon-button" type="button">Refresh</button></div>
+      <div class="pane-head"><div><p class="overline">TestRail</p><h1>Runs</h1></div><div class="pane-head-actions"><a class="demo-entry" href="/demo.html">Guided tour · demo</a><button id="refresh-runs" class="icon-button" type="button">Refresh</button></div></div>
       <div class="filter-row"><button class="filter active" type="button">Active</button></div>
       <div class="search-wrap"><input id="run-locator" type="search" placeholder="Filter runs and plans, or paste a URL and press Enter"></div>
       <div id="runs-list" class="runs-list"><div class="skeleton tall"></div><div class="skeleton tall"></div><div class="skeleton tall"></div></div>
@@ -36,7 +38,7 @@
       <div id="case-empty" class="empty"><span class="case-glyph"><i></i><i></i><i></i></span><h2>Select a case</h2><p>Review its steps and update it from a device.</p></div>
       <div id="case-loading" class="case-loading" hidden><div class="skeleton title"></div><div class="skeleton"></div><div class="skeleton"></div></div>
       <div id="case-content" hidden>
-        <div class="case-top"><div><p id="case-id" class="overline">CASE</p><h2 id="case-title">—</h2></div><div class="case-actions"><button id="history-case" class="secondary" type="button">History</button><button id="update-case" class="primary" type="button">Refresh</button></div></div>
+        <div class="case-top"><div><p id="case-id" class="overline">CASE</p><h2 id="case-title">—</h2></div><div class="case-actions"><button id="history-case" class="secondary" type="button">History</button><button id="import-evidence" class="secondary" type="button">Import evidence</button><input id="import-evidence-file" type="file" accept="application/json,.json" hidden><button id="execute-case" class="secondary" type="button">Execute</button><button id="update-case" class="primary" type="button">Refresh</button></div></div>
         <div class="case-meta"><span id="case-refs">No references</span><span id="case-estimate">No estimate</span></div>
         <section class="case-section"><h3>Preconditions</h3><p id="case-preconditions" class="prose">—</p></section>
         <section class="case-section"><h3>Steps</h3><ol id="case-steps" class="steps"></ol></section>
@@ -50,25 +52,76 @@
     <div id="device-step">
       <p class="dialog-intro">Choose where you will run the journey. Evidence is captured while you use the app.</p>
       <p id="dialog-target" class="dialog-target" hidden></p>
+      <div id="update-preflight" class="warnings" hidden></div>
       <label for="target-config">Target device for this case <span>From TestRail configurations</span></label>
       <select id="target-config"><option value="">Unspecified</option></select>
       <label>Platform</label>
       <div class="segmented"><label><input type="radio" name="platform" value="android" checked><span>Android</span></label><label><input type="radio" name="platform" value="ios"><span>iOS</span></label></div>
       <label for="device-select">Device</label>
       <div class="device-select-row"><select id="device-select"><option>Looking for devices</option></select><button id="refresh-devices" class="secondary" type="button">Refresh list</button></div>
+      <div id="remembered-device-row" class="device-select-row" hidden><p id="remembered-device" class="dialog-intro" role="status"></p><button id="forget-device" class="secondary" type="button">Forget saved device</button></div>
+      <details id="device-launchers"><summary>Start a local emulator or simulator</summary><p class="dialog-intro">Android virtual devices can start on macOS or Windows. iOS Simulator can start only on macOS with Xcode.</p><div class="device-select-row"><select id="android-avd-select"><option value="">No Android virtual devices found</option></select><button id="start-android-avd" class="secondary" type="button">Start Android</button></div><div class="device-select-row"><select id="ios-simulator-select"><option value="">No available iOS Simulators found</option></select><button id="start-ios-simulator" class="secondary" type="button">Start iOS</button></div></details>
       <details id="android-wireless"><summary>Connect Android over Wi‑Fi</summary><p class="dialog-intro">Use the private IP and the Wireless Debugging port. The code is optional if the device was already paired.</p><div class="device-select-row"><input id="wireless-host" inputmode="decimal" placeholder="192.168.1.20"><input id="wireless-port" inputmode="numeric" placeholder="Puerto"></div><div class="device-select-row"><input id="wireless-code" inputmode="numeric" maxlength="6" placeholder="Optional 6-digit code"><button id="connect-wireless" class="secondary" type="button">Connect</button></div><div class="device-select-row"><button id="discover-wireless" class="secondary" type="button">Scan the network</button><button id="disconnect-wireless" class="secondary" type="button">Disconnect</button></div><p class="dialog-intro">Or, with the device on USB, switch it to Wi‑Fi without a code: its IP is read, adbd restarts in TCP mode and it reconnects itself.</p><div class="device-select-row"><button id="usb-to-wireless" class="secondary" type="button">Switch the selected USB device to Wi‑Fi</button></div><div id="wireless-found" class="wireless-found"></div></details>
       <details id="android-state"><summary>Reproducible Android starting state</summary><p class="dialog-intro">Optional. Clearing data wipes that application local state on the selected device.</p><label>Android package<input id="android-package" maxlength="180" placeholder="com.example.app"></label><label>Initial deep link<input id="android-deep-link" maxlength="1000" placeholder="https://example.test/checkout"></label><label class="wide fallback-control"><span><input id="android-reset-data" type="checkbox"> Clear this application data before the journey</span></label></details>
       <label for="context">Context <span>Optional</span></label>
       <textarea id="context" maxlength="3000" placeholder="Test data, flow variant, or the result you expect to verify."></textarea>
+      <label class="wide fallback-control"><span><input id="force-reanalyze" type="checkbox"> Ignore an identical cached result and run vision again</span></label>
     </div>
-    <div id="recording-step" class="recording-step" hidden><div class="recording-visual"><span></span></div><h3>Recording journey</h3><p>Do one action at a time and let the screen settle. QA Sync compares each state to reconstruct the journey.</p><strong id="recording-count">0 screens · 0s</strong><div id="recording-warnings" class="recording-warnings" hidden></div><div id="appium-control" class="appium-control" hidden><p id="guided-control-label">Guided control: tap or drag directly on the screen. Evidence is captured before and after each action.</p><img id="appium-screen" alt="Device screen for guided control" draggable="false"><div class="appium-text"><input id="appium-text" maxlength="500" autocomplete="off" placeholder="Test text"><button id="appium-send-text" class="secondary" type="button">Type</button></div></div></div>
-    <div class="dialog-actions"><button id="cancel-update" class="secondary" type="button">Cancel</button><button id="continue-update" class="primary" type="button">Continue</button></div>
+    <div id="recording-step" class="recording-step" hidden><div class="recording-visual"><span></span></div><h3>Recording journey</h3><p>Do one action at a time and let the screen settle. QA Sync compares each state to reconstruct the journey.</p><strong id="recording-count">0 screens · 0s</strong><div id="analysis-progress" class="analysis-progress" hidden><strong id="analysis-progress-title">Preparing analysis</strong><p id="analysis-progress-detail"></p></div><div id="recording-warnings" class="recording-warnings" hidden></div><div id="appium-control" class="appium-control" hidden><p id="guided-control-label">Guided control: tap or drag directly on the screen. Evidence is captured before and after each action.</p><img id="appium-screen" alt="Device screen for guided control" draggable="false"><div class="appium-text"><input id="appium-text" maxlength="500" autocomplete="off" placeholder="Test text"><button id="appium-send-text" class="secondary" type="button">Type</button></div></div></div>
+    <div id="evidence-step" class="evidence-step" hidden><h3>Review captured evidence</h3><p class="dialog-intro">Checked screens can be sent to your selected provider, or exported as evidence only. Full encrypted evidence stays on this machine until you explicitly export it.</p><p id="evidence-summary" class="evidence-summary"></p><div class="evidence-tools"><button id="evidence-suggested" class="secondary" type="button">Restore suggested selection</button><button id="evidence-clear" class="secondary" type="button">Clear selection</button></div><div id="evidence-grid" class="evidence-grid" aria-label="Captured screens"></div><fieldset class="credential-policy"><legend>QA test credentials in this proposal</legend><label><input type="radio" name="credential-policy" value="redact" checked> Redact passwords and codes</label><label><input type="radio" name="credential-policy" value="include"> Keep credentials for isolated QA test accounts</label><p>Only choose Keep for test accounts you are authorised to share. Selected screens go to your AI provider either way; kept values may appear in the proposal, encrypted local drafts/cache, exports and TestRail if you publish it. API keys and access tokens in text stay redacted.</p></fieldset><label class="sensitive-review"><input id="evidence-sensitive-reviewed" type="checkbox"> I reviewed the selected screens for visible passwords, codes, tokens and private data.</label><button id="export-evidence" class="secondary evidence-export" type="button">Export selected evidence only</button></div>
+    <div class="dialog-actions"><button id="cancel-update" class="secondary" type="button">Cancel</button><button id="defer-update" class="secondary" type="button" hidden>Save for later · no AI</button><button id="minimize-update" class="secondary" type="button" hidden>Minimize</button><button id="continue-update" class="primary" type="button">Continue</button></div>
+  </dialog>
+  <dialog id="evidence-zoom" class="evidence-zoom"><div class="dialog-head"><strong id="evidence-zoom-title">Screen</strong><button id="evidence-zoom-close" class="close-button" type="button">Close</button></div><img id="evidence-zoom-image" alt="Enlarged captured screen"><div class="dialog-actions"><button id="evidence-zoom-prev" class="secondary" type="button">Previous</button><button id="evidence-zoom-toggle" class="secondary" type="button">Select screen</button><button id="evidence-zoom-next" class="secondary" type="button">Next</button></div></dialog>
+
+  <dialog id="work-dialog" class="work-dialog">
+    <div class="dialog-head"><div><p class="overline">SAVED LOCALLY</p><h2>My work</h2></div><button id="close-work" class="close-button" type="button">Close</button></div>
+    <p class="dialog-intro">Find each TC's captured evidence, pending analysis and drafts. Opening work does not call AI or update TestRail.</p>
+    <div id="work-summary" class="deferred-summary" role="status" aria-live="polite">Loading local work…</div>
+    <div id="work-list" class="history-list"></div>
+  </dialog>
+
+  <dialog id="deferred-dialog" class="deferred-dialog">
+    <div class="dialog-head"><div><p class="overline">LOCAL WORK · NO AI UNTIL STARTED</p><h2>Analysis queue</h2></div><button id="close-deferred" class="close-button" type="button">Close</button></div>
+    <p class="dialog-intro">Capture and review multiple TCs without AI, then start one-at-a-time analysis when ready. The queue survives a local server restart and never publishes to TestRail. Pausing or cancelling pending work keeps its local evidence; an analysis already running finishes first.</p>
+    <div id="deferred-summary" class="deferred-summary" role="status" aria-live="polite">Loading queue…</div>
+    <div class="deferred-settings"><label>Retry after provider limit (minutes)<input id="deferred-retry-minutes" type="number" min="5" max="120" step="1" value="15"></label><label>Pause for review after this many limit responses<input id="deferred-max-attempts" type="number" min="1" max="40" step="1" value="24"></label></div>
+    <div id="deferred-list" class="history-list"></div>
+    <div class="dialog-actions"><button id="deferred-sequential" class="primary" type="button">Start selected queue · one at a time</button><button id="deferred-pause" class="secondary" type="button">Pause after current TC</button><button id="deferred-resume" class="secondary" type="button" hidden>Resume queue</button><button id="deferred-cancel" class="secondary" type="button">Cancel pending · keep evidence</button></div>
   </dialog>
 
   <dialog id="history-dialog">
     <div class="dialog-head"><div><p class="overline">LOCAL BACKUPS</p><h2 id="history-title">History</h2></div><button id="close-history" class="close-button" type="button">Close</button></div>
     <p class="dialog-intro">Every update stores the previous fields. Restoring is blocked if somebody changed the case afterwards.</p>
     <div id="history-list" class="history-list"></div>
+  </dialog>
+
+  <dialog id="execution-dialog" class="execution-dialog">
+    <div class="dialog-head"><div><p class="overline">DETERMINISTIC EXECUTION</p><h2 id="execution-title">Run case</h2></div><button id="close-execution" class="close-button" type="button">Close</button></div>
+    <div id="execution-setup">
+      <p class="dialog-intro">Choose a device. Use the guided screen so every action is captured by ADB or Appium.</p>
+      <label>Platform</label><div class="segmented"><label><input type="radio" name="execution-platform" value="android" checked><span>Android</span></label><label><input type="radio" name="execution-platform" value="ios"><span>iOS</span></label></div>
+      <label>Device<select id="execution-device"><option value="">Looking for devices</option></select></label>
+      <label class="inline-check"><input id="execution-offline" type="checkbox" checked> Capture-only: no AI calls during this execution</label>
+      <div class="dialog-actions"><button id="start-execution" class="primary" type="button">Start execution</button></div>
+    </div>
+    <div id="execution-active" hidden>
+      <div id="execution-progress" class="summary"></div>
+      <article class="edit-step"><p id="execution-step-number" class="overline"></p><h3 id="execution-action"></h3><div class="rich-expected"><span class="rich-label">Expected result</span><p id="execution-expected"></p></div></article>
+      <img id="execution-screen" class="execution-screen" alt="Device screen for deterministic control" draggable="false">
+      <div class="execution-report-actions"><button id="show-execution-locators" class="secondary" type="button">Show accessibility locators</button></div><div id="execution-locators" class="warnings" hidden></div>
+      <div class="appium-text"><input id="execution-text" maxlength="500" autocomplete="off" placeholder="Test text"><button id="execution-send-text" class="secondary" type="button">Type</button></div>
+      <div id="execution-verification" class="warnings" hidden></div>
+      <label>Reason for fail or blocked<input id="execution-reason" maxlength="1000" placeholder="What differed or prevented execution"></label>
+      <div class="execution-verdicts"><button data-execution-outcome="passed" class="secondary" type="button">Pass</button><button data-execution-outcome="failed" class="secondary" type="button">Fail</button><button data-execution-outcome="blocked" class="secondary" type="button">Blocked</button><button id="execution-skip" data-execution-outcome="skipped" class="secondary" type="button">Skip optional</button><button id="execution-next" class="secondary" type="button" hidden>Continue</button><button id="verify-execution-step" class="primary" type="button">Verify with AI</button></div>
+      <div id="execution-finish" hidden><label class="inline-check"><input id="defer-execution" type="checkbox" checked> Keep this TC's screenshots and action summary locally for later AI analysis (no AI now)</label><label class="inline-check"><input id="publish-execution" type="checkbox"> Publish the final result to TestRail</label><label>Confirmation<input id="execution-confirmation" autocomplete="off" placeholder="PUBLICAR T123"></label><button id="finish-execution" class="primary" type="button">Finish execution</button><div class="execution-report-actions"><button id="export-execution" class="secondary" type="button" hidden>Download execution JSON</button><button id="reconcile-execution" class="secondary" type="button" hidden>Check TestRail publication</button></div></div>
+    </div>
+  </dialog>
+
+  <dialog id="preflight-dialog">
+    <div class="dialog-head"><div><p class="overline">READINESS CHECK</p><h2>Preflight</h2></div><button id="close-preflight" class="close-button" type="button">Close</button></div>
+    <p class="dialog-intro">Read-only checks before you record a journey. Nothing is changed on TestRail or your devices.</p>
+    <div id="preflight-list" class="history-list"></div>
+    <div class="dialog-inline-actions"><button id="download-support-report" class="secondary" type="button">Download support report</button><p>Contains readiness and local capabilities only — no credentials, test steps, screenshots or case bodies.</p></div>
   </dialog>
 
   <dialog id="drafts-dialog">
@@ -83,7 +136,7 @@
     <section class="settings-section">
       <div><strong>Personalized test procedures</strong><p>Your own working rules: fixed staging data, verbs you use, anything every case of yours must do. They win over the template and the style, and are sent with every analysis. They cannot make the model invent a step it did not see.</p></div>
       <div class="settings-fields">
-        <label class="wide">Procedures<textarea id="test-procedures" maxlength="4000" rows="7" placeholder="One rule per line. Example:&#10;- In staging the verification code is always 123456; write the value.&#10;- Every case ends by logging out and confirming the login screen.&#10;- Steps that only apply to tablets start with [Optional].&#10;- Use Tap for touches and Enter for typing, never Click."></textarea></label>
+        <label class="wide">Procedures<textarea id="test-procedures" maxlength="4000" rows="7" placeholder="One rule per line. Example:&#10;- Use the QA account and verification code from the team secret manager; never write their values.&#10;- Every case ends by logging out and confirming the login screen.&#10;- Steps that only apply to tablets start with [Optional].&#10;- Use Tap for touches and Enter for typing, never Click."></textarea></label>
         <div class="profile-actions"><button id="save-procedures" class="secondary" type="button">Save procedures</button><button id="load-procedures-example" class="secondary" type="button">Load the example</button></div>
       </div>
       <details class="procedures-example">
@@ -92,22 +145,22 @@
           <div>
             <p class="overline">PROCEDURES WRITTEN</p>
             <ul class="procedures-rules">
-              <li>In staging the verification code is always 123456; write the value.</li>
+              <li>Use the QA account and verification code from the team secret manager; never write their values.</li>
               <li>Every case ends by logging out and confirming the login screen.</li>
               <li>Steps that only apply to tablets start with [Optional].</li>
               <li>Use Tap for touches and Enter for typing, never Click.</li>
-              <li>Preconditions list the account as user / password / code.</li>
+              <li>Preconditions identify the QA account without copying its credentials.</li>
             </ul>
           </div>
           <div class="rich-case">
             <p class="overline">EXAMPLE OUTPUT &mdash; NOT A REAL RUN</p>
             <h3>Verify sign-in with verification code (staging) - Android tablet</h3>
-            <section><h4>Preconditions</h4><div class="rich-body"><ul><li>Staging account: staging-qa@example.com / Str0ngStaging! / verification code 123456</li><li>Device: Galaxy Tab A8, Android 14, app build from staging</li></ul></div></section>
+            <section><h4>Preconditions</h4><div class="rich-body"><ul><li>QA staging account configured in the team secret manager</li><li>Device: Galaxy Tab A8, Android 14, app build from staging</li></ul></div></section>
             <section><h4>Steps</h4>
               <ol class="rich-steps">
                 <li><div class="rich-step"><div class="rich-body"><p>Tap <strong>Log in</strong> on the welcome screen.</p></div><div class="rich-expected"><span class="rich-label">Expected result</span><div class="rich-body"><ul><li>The email field takes focus.</li></ul></div></div></div></li>
                 <li><div class="rich-step"><div class="rich-body"><p>Enter the account email and password from the preconditions and tap <strong>Continue</strong>.</p></div><div class="rich-expected"><span class="rich-label">Expected result</span><div class="rich-body"><ul><li>The verification screen opens with an empty 6-digit field.</li></ul></div></div></div></li>
-                <li><div class="rich-step"><div class="rich-body"><p>Enter the verification code <strong>123456</strong>.</p></div><div class="rich-expected"><span class="rich-label">Expected result</span><div class="rich-body"><ul><li>The home screen loads with the account name in the top bar.</li></ul></div></div></div></li>
+                <li><div class="rich-step"><div class="rich-body"><p>Enter the QA verification code from the team secret manager.</p></div><div class="rich-expected"><span class="rich-label">Expected result</span><div class="rich-body"><ul><li>The home screen loads with the account name in the top bar.</li></ul></div></div></div></li>
                 <li><div class="rich-step"><span class="optional-badge">Optional</span><div class="rich-body"><p>Rotate the tablet to landscape.</p></div><div class="rich-expected"><span class="rich-label">Expected result</span><div class="rich-body"><ul><li>The home screen keeps the session and re-lays out in two columns.</li></ul></div></div></div></li>
                 <li><div class="rich-step"><div class="rich-body"><p>Open the menu and tap <strong>Log out</strong>.</p></div><div class="rich-expected"><span class="rich-label">Expected result</span><div class="rich-body"><ul><li>The login screen is shown and reopening the app does not restore the session.</li></ul></div></div></div></li>
               </ol>
@@ -118,7 +171,7 @@
     </section>
     <section class="settings-section">
       <div><strong>Drafts by case</strong><p>A draft never expires and is never written to TestRail. Reopen one to keep editing, then apply it when it is ready.</p></div>
-      <div id="drafts-list" class="history-list"></div>
+      <div><div id="drafts-list" class="history-list"></div><button id="export-drafts" class="secondary" type="button">Export all drafts</button><button id="import-drafts" class="secondary" type="button">Import drafts</button><input id="import-drafts-file" type="file" accept="application/json,.json" hidden></div>
     </section>
   </dialog>
 
@@ -127,10 +180,15 @@
     <p class="dialog-intro matrix-intro">Built as cases are updated; keeps the device, platform and detected version.</p>
     <div id="matrix-list" class="history-list matrix-list"></div>
   </dialog>
+  <dialog id="quality-dialog">
+    <div class="dialog-head"><div><p class="overline">LOCAL AI QUALITY</p><h2>Quality metrics</h2></div><button id="close-quality" class="close-button" type="button">Close</button></div>
+    <p class="dialog-intro">Aggregated from explicit step reviews. Case bodies and screenshots are not stored here.</p>
+    <div id="quality-list" class="history-list"></div>
+  </dialog>
 
   <dialog id="settings-dialog" class="settings-dialog">
     <form id="settings-form">
-      <div class="dialog-head"><div><p class="overline">PERSONAL SETTINGS</p><h2>Connect your tools</h2></div><button id="close-settings" class="close-button" type="button">Close</button></div>
+      <div class="dialog-head"><div><p class="overline">PERSONAL SETTINGS</p><h2>Workspace preferences</h2></div><button id="close-settings" class="close-button" type="button">Close</button></div>
       <div class="settings-body">
         <section class="settings-section">
           <div><h3>Team / project profile</h3><p>Stores fields, platforms and provider without copying credentials.</p></div>
@@ -153,19 +211,26 @@
           <div><h3>Vision</h3><p>Each person chooses which account and usage allowance to spend.</p></div>
           <div class="settings-fields">
             <label class="wide">Provider<select id="setting-vision-provider" name="vision_provider" required><option value="">Pick a provider…</option><option value="codex">Codex · your plan allowance</option><option value="claude">Claude · your plan allowance</option><option value="openai_api">OpenAI API · billed separately</option></select></label>
-            <label class="wide">Quality, volume and usage<select id="setting-vision-quality" name="vision_quality"><option value="economical">Efficient · half the screens, min 8 · 1 call · reduced detail</option><option value="high">High · every screen · 1 call · full detail</option><option value="maximum">Maximum · every screen · 2 calls · second review</option></select></label>
+            <label class="wide">Image quality and token use<select id="setting-vision-quality" name="vision_quality"><option value="economical">Efficient · 768px JPEG · lowest tokens</option><option value="high">High · 1440px JPEG · balanced detail</option><option value="maximum">Maximum · original captures · highest detail</option></select></label>
             <label data-provider-field="openai_api">OpenAI API key<input id="setting-openai-key" name="openai_api_key" type="password" placeholder="Leave empty to keep"></label>
             <label data-provider-field="openai_api">OpenAI API model<input id="setting-openai-model" name="openai_model" placeholder="gpt-4o"></label>
-            <label data-provider-field="codex">Codex model<input id="setting-codex-model" name="codex_model" placeholder="Empty uses the default"></label>
-            <label data-provider-field="claude">Claude model<input id="setting-claude-model" name="claude_model" placeholder="Empty uses the default"></label>
+            <label data-provider-field="codex">Codex model<input id="setting-codex-model" name="codex_model" placeholder="gpt-5.6-sol"></label>
+            <label data-provider-field="claude">Claude model<input id="setting-claude-model" name="claude_model" placeholder="sonnet"></label>
             <div id="provider-status" class="provider-status wide">Checking local availability…</div>
             <label class="wide fallback-control"><span><input id="setting-allow-fallback" type="checkbox"> Allow switching provider automatically when the allowance runs out</span></label>
             <label class="wide fallback-control" id="fallback-provider-wrap">Fallback provider<select id="setting-fallback-provider"><option value="">Pick a fallback provider…</option><option value="codex">Codex</option><option value="claude">Claude</option></select></label>
-            <label>Capture every (seconds)<input id="setting-capture-interval" type="number" min="0.5" max="10" step="0.25"></label><label>Screens per journey <span>Up to 200; vision quality decides how many reach the model</span><input id="setting-max-images" name="max_images" type="number" min="2" max="200"></label>
+            <label>Capture every (seconds)<input id="setting-capture-interval" type="number" min="0.5" max="10" step="0.25"></label><label>Screens per journey <span>Evidence retained locally; up to 200</span><input id="setting-max-images" name="max_images" type="number" min="2" max="200"></label><label>Screens sent to AI <span>Representative chronological selection; 40 is recommended for Claude Pro</span><input id="setting-ai-max-images" name="ai_max_images" type="number" min="1" max="200"></label>
             <label>Hourly rate USD <span>Optional, to express time as money</span><input id="setting-hourly-rate" type="number" min="0" max="10000" step="1"></label><label>Maximum duration (seconds)<input id="setting-max-recording-seconds" name="max_recording_seconds" type="number" min="60" max="3600"></label>
+            <label>Minimum confidence to update <span>0 disables the gate</span><input id="setting-min-confidence" type="number" min="0" max="1" step="0.05"></label>
+            <label>Automatic verification confidence<input id="setting-verification-confidence" type="number" min="0" max="1" step="0.05"></label>
+            <label>Capture retention (hours)<input id="setting-capture-retention" type="number" min="1" max="8760"></label>
+            <label>Analysis cache retention (hours)<input id="setting-cache-retention" type="number" min="1" max="8760"></label>
+            <label>Draft retention (days) <span>0 keeps forever</span><input id="setting-draft-retention" type="number" min="0" max="3650"></label>
+            <label>History retention (days) <span>0 keeps forever</span><input id="setting-history-retention" type="number" min="0" max="3650"></label>
             <label>Write mode<select id="setting-write-mode" name="write_mode"><option value="confirm">Confirm and update</option><option value="review_only">Dry run only</option></select></label>
             <label>Appium URL<input id="setting-appium-url" name="appium_url" type="url" placeholder="http://127.0.0.1:4723"></label>
             <label>iOS bundle ID<input id="setting-ios-bundle-id" name="ios_bundle_id" placeholder="com.example.app"></label>
+            <label class="wide">Xcode Developer directory <span>Optional; use when Xcode is outside /Applications</span><input id="setting-developer-dir" name="developer_dir" placeholder="/path/to/Xcode.app/Contents/Developer"></label>
             <label class="wide">Extra Appium capabilities (JSON)<input id="setting-appium-capabilities" name="appium_capabilities_json" placeholder='{"appium:xcodeOrgId":"TEAM_ID"}'></label>
             <label class="wide">Remote iOS devices (JSON)<input id="setting-ios-devices" name="ios_devices_json" placeholder='[{"id":"UDID","name":"iPhone QA","version":"18.1"}]'></label>
           </div>
@@ -181,13 +246,25 @@
             <label>iOS value<input id="setting-ios-value" name="testrail_ios_value" placeholder="Opcional"></label>
           </div>
         </details>
+        <details class="advanced-settings">
+          <summary>Trusted local tools</summary>
+          <p>Review the exact path and SHA-256 before approving a tool. Approval is local to this QA Sync installation and is invalidated if the binary changes.</p>
+          <div id="trusted-tools-list" class="history-list"></div>
+        </details>
+        <details class="advanced-settings">
+          <summary>Encrypted analysis cache</summary>
+          <p id="analysis-cache-status">Checking local cache…</p>
+          <button id="clear-analysis-cache" class="secondary" type="button">Clear analysis cache</button>
+        </details>
         <p id="secret-storage-note" class="security-note"></p>
       </div>
-      <div class="dialog-actions"><button id="cancel-settings" class="secondary" type="button">Cancel</button><button id="save-settings" class="primary" type="submit">Save and connect</button></div>
+      <div class="dialog-actions"><button id="cancel-settings" class="secondary" type="button">Cancel</button><button id="save-settings" class="primary" type="submit">Save settings</button></div>
     </form>
   </dialog>
 
-  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <aside id="analysis-task" class="analysis-task" hidden aria-live="polite"><div><strong id="analysis-task-title">Generating proposal</strong><p id="analysis-task-detail">Working in the background.</p></div><button id="restore-analysis" class="secondary" type="button">Show progress</button></aside>
+  <div id="toast" class="toast" popover="manual" role="status" aria-live="polite"><span id="toast-message"></span><button id="undo-toast" type="button" hidden>Undo</button><button id="copy-toast" type="button" aria-label="Copy message">Copy</button></div>
+  <dialog id="error-dialog" class="error-dialog" aria-labelledby="error-dialog-title"><div class="dialog-head"><div><p class="overline">ERROR</p><h2 id="error-dialog-title">Action needs attention</h2></div><button id="close-error-message" class="close-button" type="button">Close</button></div><div class="error-dialog-body"><p id="error-message"></p><div class="dialog-actions"><button id="copy-error-message" class="primary" type="button">Copy error</button><button id="dismiss-error-message" class="secondary" type="button">Close</button></div></div></dialog>
   <script src="/app.js"></script>
 </body>
 </html>

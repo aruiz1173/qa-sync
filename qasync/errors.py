@@ -16,3 +16,7 @@ class UsageLimitError(ExternalServiceError):
 
 class ValidationError(QASyncError):
     pass
+
+
+class ConflictError(QASyncError):
+    """A local proposal was changed by another editor since it was opened."""

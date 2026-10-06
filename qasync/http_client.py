@@ -7,6 +7,7 @@ import urllib.request
 from typing import Any
 
 from .errors import ExternalServiceError
+from .sensitive import redact_text
 
 MAX_RESPONSE_BYTES = 50 * 1024 * 1024
 RETRY_BUDGET_SECONDS = 12.0
@@ -46,7 +47,7 @@ def request_json(
                 raise ExternalServiceError("The external service returned a response that is too large.")
             break
         except urllib.error.HTTPError as exc:
-            detail = exc.read(4096).decode("utf-8", errors="replace")
+            detail = redact_text(exc.read(4096).decode("utf-8", errors="replace"))
             if attempt + 1 < attempts and (exc.code == 429 or 500 <= exc.code < 600):
                 retry_after = (exc.headers.get("Retry-After", "") if exc.headers else "").strip()
                 if retry_after.isdigit():
@@ -73,7 +74,7 @@ def request_json(
             if attempt + 1 < attempts:
                 time.sleep(0.4 * (2 ** attempt))
                 continue
-            raise ExternalServiceError(f"Could not reach the external service: {exc.reason}") from exc
+            raise ExternalServiceError(f"Could not reach the external service: {redact_text(exc.reason)}") from exc
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:

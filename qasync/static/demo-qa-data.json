@@ -1,0 +1,521 @@
+{
+  "version": 1,
+  "project": "Mobile QA · Modes & Settings (synthetic)",
+  "runs": [
+    {
+      "id": 9101,
+      "name": "Modes · iPad regression",
+      "platform": "ios",
+      "device": "Demo iPad · iOS (illustrative)"
+    },
+    {
+      "id": 9102,
+      "name": "Modes · Android regression",
+      "platform": "android",
+      "device": "Demo tablet · Android (illustrative)"
+    },
+    {
+      "id": 9103,
+      "name": "Settings · cross-platform",
+      "platform": "ios",
+      "device": "Demo iPhone · iOS (illustrative)"
+    },
+    {
+      "id": 9104,
+      "name": "Recovery & review gates",
+      "platform": "android",
+      "device": "Demo phone · Android (illustrative)"
+    }
+  ],
+  "cases": [
+    {
+      "id": 900001,
+      "run_id": 9101,
+      "title": "Verify a single mode with no device assigned",
+      "status": "failed",
+      "category": "Negative · AI correction",
+      "scenario": "hallucination",
+      "preconditions": "A synthetic owner account has exactly one mode and no device assignment.",
+      "steps": [
+        {
+          "content": "Open More → Modes and settings.",
+          "expected": "The single mode appears in the list."
+        },
+        {
+          "content": "Open the mode details.",
+          "expected": "The assignment field says No device assigned."
+        },
+        {
+          "content": "Return to the modes list.",
+          "expected": "The mode remains unassigned."
+        }
+      ],
+      "candidate_note": "A prewritten hypothetical suggestion incorrectly treats this iPad as assigned. Reject that unsupported claim before saving the example draft; no AI analysed a screen.",
+      "candidate_steps": [
+        {
+          "content": "Open More → Modes and settings.",
+          "expected": "The single mode appears in the list."
+        },
+        {
+          "content": "Open the mode details and inspect its assignment.",
+          "expected": "The mode is assigned to this iPad."
+        },
+        {
+          "content": "Return to the modes list.",
+          "expected": "The mode remains assigned to this iPad."
+        }
+      ]
+    },
+    {
+      "id": 900002,
+      "run_id": 9101,
+      "title": "Show an empty modes list",
+      "status": "passed",
+      "category": "Empty state",
+      "preconditions": "The synthetic account has no modes configured.",
+      "steps": [
+        {
+          "content": "Open More.",
+          "expected": "Modes and settings is available."
+        },
+        {
+          "content": "Open Modes and settings.",
+          "expected": "An empty state explains that no modes exist."
+        },
+        {
+          "content": "Return to More.",
+          "expected": "Navigation succeeds without creating a mode."
+        }
+      ]
+    },
+    {
+      "id": 900003,
+      "run_id": 9101,
+      "title": "Open a mode assigned to a demo device",
+      "status": "passed",
+      "category": "Happy path",
+      "preconditions": "One synthetic mode is assigned to Demo iPad.",
+      "steps": [
+        {
+          "content": "Open Modes and settings.",
+          "expected": "The mode and its assignment are visible."
+        },
+        {
+          "content": "Open the mode details.",
+          "expected": "The device field names Demo iPad."
+        },
+        {
+          "content": "Return to the list.",
+          "expected": "The assignment still names Demo iPad."
+        }
+      ],
+      "candidate_note": "In this hypothetical example, the assignment label and device name appear together. Review whether the more specific expected result would be justified by real evidence.",
+      "candidate_steps": [
+        {"content": "Open Modes and settings.", "expected": "The mode and its assignment are visible."},
+        {"content": "Open the mode details.", "expected": "The assignment field explicitly names Demo iPad."},
+        {"content": "Return to the list.", "expected": "The assignment still names Demo iPad."}
+      ]
+    },
+    {
+      "id": 900004,
+      "run_id": 9101,
+      "title": "Dismiss a mode action sheet without changing settings",
+      "status": "failed",
+      "category": "Regression · no change",
+      "scenario": "unchanged",
+      "preconditions": "A synthetic mode exists and its original settings are noted.",
+      "steps": [
+        {
+          "content": "Open the mode action sheet.",
+          "expected": "Available actions are shown."
+        },
+        {
+          "content": "Dismiss the sheet without selecting an action.",
+          "expected": "The mode list returns unchanged."
+        },
+        {
+          "content": "Reopen the mode.",
+          "expected": "All settings match the original values."
+        }
+      ]
+    },
+    {
+      "id": 900005,
+      "run_id": 9101,
+      "title": "Keep the modes list readable after rotation",
+      "status": "untested",
+      "category": "Layout · optional",
+      "preconditions": "At least two synthetic modes exist on the demo iPad.",
+      "steps": [
+        {
+          "content": "Open Modes and settings in portrait.",
+          "expected": "Mode names and assignments are readable."
+        },
+        {
+          "content": "Rotate to landscape.",
+          "expected": "The list reflows without clipped controls."
+        },
+        {
+          "content": "Rotate back to portrait.",
+          "expected": "The same mode stays selected.",
+          "optional": true
+        }
+      ]
+    },
+    {
+      "id": 900006,
+      "run_id": 9102,
+      "title": "Find Modes and settings by search",
+      "status": "passed",
+      "category": "Navigation",
+      "preconditions": "The synthetic Android settings screen is open.",
+      "steps": [
+        {
+          "content": "Focus Search settings.",
+          "expected": "The search field accepts text."
+        },
+        {
+          "content": "Enter Modes.",
+          "expected": "Modes and settings appears in results."
+        },
+        {
+          "content": "Open the result.",
+          "expected": "The modes list opens."
+        }
+      ]
+    },
+    {
+      "id": 900007,
+      "run_id": 9102,
+      "title": "Prevent duplicate mode names",
+      "status": "failed",
+      "category": "Negative · validation",
+      "preconditions": "A synthetic mode named Counter already exists.",
+      "steps": [
+        {
+          "content": "Start creating a mode.",
+          "expected": "The mode form opens."
+        },
+        {
+          "content": "Enter Counter as the name and submit.",
+          "expected": "A duplicate-name validation appears."
+        },
+        {
+          "content": "Return to the modes list.",
+          "expected": "Only one Counter mode exists."
+        }
+      ]
+    },
+    {
+      "id": 900008,
+      "run_id": 9102,
+      "title": "Do not infer an assignment from an ambiguous screen",
+      "status": "blocked",
+      "category": "Evidence insufficient",
+      "scenario": "insufficient",
+      "preconditions": "The assignment field is outside the visible viewport.",
+      "steps": [
+        {
+          "content": "Open Modes and settings.",
+          "expected": "The mode is listed."
+        },
+        {
+          "content": "Inspect the assignment field.",
+          "expected": "The tester can determine whether a device is assigned."
+        },
+        {
+          "content": "Record the observed assignment.",
+          "expected": "The case reflects the visible state only."
+        }
+      ],
+      "candidate_note": "The example labels do not establish the assignment field. Do not infer a verdict or publish an assignment without real evidence."
+    },
+    {
+      "id": 900009,
+      "run_id": 9102,
+      "title": "Recover the mode list after an offline interruption",
+      "status": "untested",
+      "category": "Recovery",
+      "preconditions": "A synthetic modes list has been loaded once.",
+      "steps": [
+        {
+          "content": "Disable the test network and reopen Modes.",
+          "expected": "The app explains the offline state without showing a false empty list."
+        },
+        {
+          "content": "Restore the network and retry.",
+          "expected": "The list refreshes."
+        },
+        {
+          "content": "Open a mode.",
+          "expected": "Its current details load."
+        }
+      ]
+    },
+    {
+      "id": 900010,
+      "run_id": 9102,
+      "title": "Block assignment when the test device is unavailable",
+      "status": "blocked",
+      "category": "Environment blocker",
+      "scenario": "blocked",
+      "preconditions": "The synthetic assignment target is disconnected.",
+      "steps": [
+        {
+          "content": "Open mode details and choose Assign device.",
+          "expected": "Eligible devices are listed or an unavailable state appears."
+        },
+        {
+          "content": "Select the disconnected demo device.",
+          "expected": "The app prevents an invalid assignment."
+        },
+        {
+          "content": "Return to mode details.",
+          "expected": "The prior assignment is unchanged."
+        }
+      ],
+      "candidate_note": "Hypothetical environment blocker: in a real run, document the blocker and retest instead of claiming a product failure."
+    },
+    {
+      "id": 900011,
+      "run_id": 9103,
+      "title": "Persist a notification setting after reopening",
+      "status": "passed",
+      "category": "Persistence",
+      "preconditions": "A synthetic QA account is signed in.",
+      "steps": [
+        {
+          "content": "Open Settings → Notifications.",
+          "expected": "The current preference is visible."
+        },
+        {
+          "content": "Turn mode alerts off.",
+          "expected": "The control shows Off and save feedback appears."
+        },
+        {
+          "content": "Leave and reopen Notifications.",
+          "expected": "Mode alerts remains Off."
+        }
+      ]
+    },
+    {
+      "id": 900012,
+      "run_id": 9103,
+      "title": "Keep a settings change after backgrounding",
+      "status": "untested",
+      "category": "Lifecycle",
+      "preconditions": "The synthetic account is on the Settings screen.",
+      "steps": [
+        {
+          "content": "Change the display preference.",
+          "expected": "The new value is shown."
+        },
+        {
+          "content": "Background and reopen the app.",
+          "expected": "Settings returns without losing the value."
+        },
+        {
+          "content": "Navigate away and back.",
+          "expected": "The value remains selected."
+        }
+      ]
+    },
+    {
+      "id": 900013,
+      "run_id": 9103,
+      "title": "Reject a setting change without permission",
+      "status": "passed",
+      "category": "Permissions",
+      "preconditions": "The synthetic account lacks permission to change shared settings.",
+      "steps": [
+        {
+          "content": "Open shared settings.",
+          "expected": "The values are visible read-only."
+        },
+        {
+          "content": "Attempt to edit a protected value.",
+          "expected": "The app explains that permission is required."
+        },
+        {
+          "content": "Reopen shared settings.",
+          "expected": "The value did not change."
+        }
+      ]
+    },
+    {
+      "id": 900014,
+      "run_id": 9103,
+      "title": "Read mode controls with VoiceOver",
+      "status": "blocked",
+      "category": "Accessibility",
+      "preconditions": "VoiceOver is enabled on a synthetic iOS test device.",
+      "steps": [
+        {
+          "content": "Navigate the Modes screen with VoiceOver.",
+          "expected": "Every mode has a meaningful spoken label."
+        },
+        {
+          "content": "Focus the assignment control.",
+          "expected": "The current assignment is announced."
+        },
+        {
+          "content": "Dismiss the screen.",
+          "expected": "Focus returns to the prior navigation item."
+        }
+      ]
+    },
+    {
+      "id": 900015,
+      "run_id": 9103,
+      "title": "Preserve an optional help step in review",
+      "status": "passed",
+      "category": "Optional step",
+      "preconditions": "The synthetic Settings screen is open.",
+      "steps": [
+        {
+          "content": "Open Modes and settings.",
+          "expected": "The modes list appears."
+        },
+        {
+          "content": "Open the help explanation.",
+          "expected": "The explanation is readable.",
+          "optional": true
+        },
+        {
+          "content": "Return to Settings.",
+          "expected": "The app returns without changing a mode."
+        }
+      ]
+    },
+    {
+      "id": 900016,
+      "run_id": 9104,
+      "title": "Retry analysis after a timeout without losing evidence",
+      "status": "passed",
+      "category": "QA Sync · recovery",
+      "scenario": "timeout",
+      "preconditions": "A synthetic journey was captured and mock screens were selected.",
+      "steps": [
+        {
+          "content": "Start simulated analysis.",
+          "expected": "Progress and the current batch are visible."
+        },
+        {
+          "content": "Simulate a provider timeout.",
+          "expected": "Evidence remains available and no case is updated."
+        },
+        {
+          "content": "Retry analysis.",
+          "expected": "The same journey can be reviewed again."
+        }
+      ],
+      "candidate_note": "Hypothetical provider timeout. No provider was called here; selecting Retry only reveals the prewritten follow-up example."
+    },
+    {
+      "id": 900017,
+      "run_id": 9104,
+      "title": "Reject a proposed step that lacks evidence",
+      "status": "failed",
+      "category": "QA Sync · AI review",
+      "scenario": "hallucination",
+      "preconditions": "A synthetic modes journey has an ambiguous final frame.",
+      "steps": [
+        {
+          "content": "Open Modes and settings.",
+          "expected": "The modes list appears."
+        },
+        {
+          "content": "Open the unassigned mode.",
+          "expected": "The assignment field says No device assigned."
+        },
+        {
+          "content": "Return to the list.",
+          "expected": "No assignment change is shown."
+        }
+      ],
+      "candidate_note": "The prewritten suggestion asserts a successful assignment without supporting evidence. Reject affected steps and explain the gap.",
+      "candidate_steps": [
+        {
+          "content": "Open Modes and settings.",
+          "expected": "The modes list appears."
+        },
+        {
+          "content": "Open the unassigned mode.",
+          "expected": "The mode is assigned to Demo phone."
+        },
+        {
+          "content": "Return to the list.",
+          "expected": "The new assignment is saved."
+        }
+      ]
+    },
+    {
+      "id": 900018,
+      "run_id": 9104,
+      "title": "Avoid updating a TC when the observed flow is unchanged",
+      "status": "passed",
+      "category": "QA Sync · no-op",
+      "scenario": "unchanged",
+      "preconditions": "The synthetic mode follows the documented steps exactly.",
+      "steps": [
+        {
+          "content": "Open Modes and settings.",
+          "expected": "The modes list appears."
+        },
+        {
+          "content": "Open the mode details.",
+          "expected": "The documented fields are present."
+        },
+        {
+          "content": "Return to the list.",
+          "expected": "No state changed."
+        }
+      ]
+    },
+    {
+      "id": 900019,
+      "run_id": 9104,
+      "title": "Restore an accidentally deleted proposal step",
+      "status": "untested",
+      "category": "QA Sync · undo/redo",
+      "preconditions": "A synthetic proposal with three steps is open.",
+      "steps": [
+        {
+          "content": "Delete the middle proposed step.",
+          "expected": "The proposal shows two steps and Undo is available."
+        },
+        {
+          "content": "Select Undo.",
+          "expected": "The deleted step and its expected result return."
+        },
+        {
+          "content": "Select Redo.",
+          "expected": "The deletion is reapplied without changing the original TC.",
+          "optional": true
+        }
+      ]
+    },
+    {
+      "id": 900020,
+      "run_id": 9104,
+      "title": "Keep an audit trail for a rejected update",
+      "status": "untested",
+      "category": "QA Sync · traceability",
+      "preconditions": "A synthetic proposal has been reviewed and one step was rejected.",
+      "steps": [
+        {
+          "content": "Record the rejection reason.",
+          "expected": "The reason is attached to the proposed step."
+        },
+        {
+          "content": "Choose Do not update.",
+          "expected": "The original TC remains unchanged."
+        },
+        {
+          "content": "Export the demo audit.",
+          "expected": "The export records the decision without live TestRail data."
+        }
+      ]
+    }
+  ]
+}

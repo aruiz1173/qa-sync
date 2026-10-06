@@ -21,15 +21,20 @@ from qasync.app import BoundedThreadingHTTPServer, allowed_host, allowed_origin,
 from qasync.appium import AppiumClient
 from qasync.config import Config
 from qasync.evidence import EvidenceCipher, MAGIC as EVIDENCE_MAGIC
+from qasync.execution import ExecutionStore
+from qasync.analysis_cache import AnalysisCache
+from qasync.evals import score_case
 from qasync.envfile import load_dotenv
-from qasync.errors import ConfigurationError, ExternalServiceError, UsageLimitError, ValidationError
-from qasync.executables import describe_untrusted, file_sha256, pinned_hashes, trusted_which
+from qasync.errors import ConfigurationError, ConflictError, ExternalServiceError, UsageLimitError, ValidationError
+from qasync.executables import describe_untrusted, file_sha256, inspect_tool, pinned_hashes, trust_current_tool, trusted_which
 from qasync.history import HistoryStore
+from qasync import launcher
+from qasync.quality import FeedbackStore
 from qasync.http_client import request_json
 from qasync.recorder import RecorderManager, RecordingSession, _redacted_label, parse_adb_devices, parse_ios_devices, parse_xctrace_physical_devices
 from qasync.devices import (
     adb_endpoint_result, parse_adb_mdns_services, parse_adb_tcpip_result, parse_android_ip,
-    parse_rotation, parse_scrcpy_major, parse_touch_bounds,
+    parse_available_ios_simulators, parse_rotation, parse_scrcpy_major, parse_touch_bounds,
 )
 from qasync.service import DraftStore, Proposal, ProposalStore, QASyncService
 from qasync.settings import SettingsManager, _validated_service_url
@@ -41,6 +46,7 @@ from qasync.vision import (
     _polish_result, _procedures_instruction, _prompt, _review_prompt,
     _efficient_limit, _representative_images,
     _validated_data_url,
+    _validate_verification,
 )
 
 
@@ -201,8 +207,58 @@ class CaseIdTests(unittest.TestCase):
             self.assertIn(f'id="{control}"', html)
         self.assertFalse((root / "package.json").exists())
 
+    def test_guided_tour_is_isolated_and_does_not_execute_cases(self):
+        root = Path(__file__).resolve().parents[1] / "qasync" / "static"
+        index = (root / "index.html").read_text(encoding="utf-8")
+        self.assertIn('href="/demo.html"', index)
+        self.assertNotIn('src="/live-tour.js"', index)
+        demo_html = (root / "demo.html").read_text(encoding="utf-8")
+        self.assertIn('src="/demo.js"', demo_html)
+        self.assertIn('id="demo-start-tour"', demo_html)
+        self.assertNotIn("/?tour=1", demo_html)
+        fixture = json.loads((root / "demo-qa-data.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(fixture["runs"]), 4)
+        self.assertEqual(len(fixture["cases"]), 20)
+        script = (root / "demo.js").read_text(encoding="utf-8")
+        self.assertIn('fetch("/demo-qa-data.json")', script)
+        self.assertNotIn('fetch("/api/', script)
+        tour = script.split("const tourSteps=[", 1)[1].split("function showTourStep", 1)[0]
+        self.assertNotIn("demoExecution?.open()", tour)
+        self.assertNotIn("data-action=\"execute\"", tour)
+        self.assertIn("does not read production data, execute test cases", tour)
+        self.assertIn("no images exist and no batches ran", tour)
+        self.assertIn('target.scrollIntoView({block:"center"', script)
+        self.assertIn('if(!target||!target.getClientRects().length)return;', script)
+        self.assertIn('spot.hidden=true;', script)
+        self.assertIn('document.addEventListener("scroll",positionSpotlight,true)', script)
+
+    def test_audit_can_export_a_spreadsheet_safe_csv(self):
+        root = Path(__file__).resolve().parents[1]
+        app = (root / "qasync" / "static" / "app.js").read_text(encoding="utf-8")
+        html = (root / "qasync" / "static" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="export-audit-csv"', html)
+        self.assertIn("downloadAuditCsv", app)
+        self.assertIn("text/csv;charset=utf-8", app)
+        self.assertIn("csvValue", app)
+
 
 class TestRailPaginationTests(unittest.TestCase):
+    @patch("qasync.testrail.request_json")
+    def test_lists_results_for_one_test_when_reconciling_a_write(self, request):
+        request.return_value = {"results": [{"id": 8, "comment": "Execution: abc"}], "size": 1}
+        results = TestRailClient(config()).get_results_for_test(42)
+        self.assertEqual(results[0]["id"], 8)
+        self.assertIn("get_results_for_test/42", request.call_args.args[0])
+
+    @patch("qasync.testrail.request_json")
+    def test_publishes_a_bounded_result_for_a_specific_test(self, request):
+        request.return_value = {"id": 77, "status_id": 1}
+        result = TestRailClient(config()).add_result_for_test(42, 1, "ok" * 5000)
+        self.assertEqual(result["id"], 77)
+        self.assertIn("add_result/42", request.call_args.args[0])
+        self.assertEqual(request.call_args.kwargs["body"]["status_id"], 1)
+        self.assertEqual(len(request.call_args.kwargs["body"]["comment"]), 8000)
+
     @patch("qasync.testrail.request_json")
     def test_loads_all_pages(self, request):
         request.side_effect = [
@@ -254,6 +310,19 @@ class TestRailPaginationTests(unittest.TestCase):
         # Una cuota por minuto no se libera en 400 ms.
         self.assertEqual([call.args[0] for call in sleep.call_args_list], [2.0, 4.0])
 
+    def test_external_error_does_not_echo_authentication_values(self):
+        error = urllib.error.HTTPError(
+            "https://x.testrail.com", 400, "Bad Request",
+            email.message_from_string(""),
+            io.BytesIO(b'{"error":"Password: testing-secret; Authorization: Bearer abcdefghijklmnop"}'),
+        )
+        with patch("qasync.http_client.urllib.request.build_opener") as opener:
+            opener.return_value.open.side_effect = error
+            with self.assertRaises(ExternalServiceError) as caught:
+                request_json("https://x.testrail.com")
+        self.assertNotIn("testing-secret", str(caught.exception))
+        self.assertNotIn("abcdefghijklmnop", str(caught.exception))
+
     def test_a_wait_longer_than_the_budget_fails_fast_with_the_server_message(self):
         # app.py corta la conexión del navegador a los 20 s. Esperar menos de lo que
         # pide el servidor sólo gasta ese tiempo para volver a fallar, así que se
@@ -291,6 +360,125 @@ class TestRailPaginationTests(unittest.TestCase):
 
 
 class ImageTests(unittest.TestCase):
+    def test_verifier_receives_before_and_after_frames_in_order(self):
+        analyzer = VisionAnalyzer(config())
+        before = {"type": "image/png", "data": base64.b64encode(b"before").decode()}
+        after = {"type": "image/png", "data": base64.b64encode(b"after").decode()}
+        with patch.object(analyzer, "_call_verification_provider", return_value={
+            "verdict": "passed", "confidence": 0.9, "reason": "Changed", "observed": "Receipt",
+        }) as call:
+            analyzer.verify_step(platform="android", before_image=before, image=after,
+                                 action="Tap Pay", expected="Receipt", stable=True)
+        self.assertEqual(call.call_args.args[1], [before, after])
+        self.assertIn("FRAME 1", call.call_args.args[2])
+
+    def test_step_verification_rejects_unbounded_or_unknown_verdicts(self):
+        self.assertEqual(_validate_verification({
+            "verdict": "uncertain", "confidence": 0.4,
+            "reason": "Not visible", "observed": "A loading state",
+        })["verdict"], "uncertain")
+        with self.assertRaises(ExternalServiceError):
+            _validate_verification({"verdict": "probably", "confidence": 1,
+                                    "reason": "x", "observed": "y"})
+
+    def test_verifier_never_promotes_provider_output_without_validation(self):
+        analyzer = VisionAnalyzer(config())
+        with patch.object(analyzer, "_call_verification_provider", return_value={
+            "verdict": "passed", "confidence": 0.91,
+            "reason": "Receipt visible", "observed": "Receipt screen",
+        }):
+            result = analyzer.verify_step(
+                platform="android", image={"type": "image/png", "data": base64.b64encode(b"image").decode()},
+                action="Tap Pay", expected="Receipt is visible",
+            )
+        self.assertEqual(result["verdict"], "passed")
+        self.assertEqual(result["provider_used"], "openai_api")
+
+    def test_golden_eval_counts_missing_and_unsupported_steps(self):
+        result = score_case(
+            {"title": "Checkout", "steps": [{"content": "Tap Pay", "expected": "Receipt"}]},
+            {"title": " checkout ", "steps": [{"content": "Tap Other", "expected": "Wrong"}]},
+        )
+        self.assertTrue(result["title_match"])
+        self.assertEqual(result["step_precision"], 0)
+        self.assertEqual(result["step_recall"], 0)
+        self.assertEqual(result["unsupported_steps"], 1)
+        self.assertEqual(result["missing_steps"], 1)
+
+    def test_analysis_cache_is_encrypted_and_invalidates_on_fingerprint_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            key = base64.urlsafe_b64encode(b"k" * 32).decode("ascii")
+            cache = AnalysisCache(Path(directory), key)
+            first = cache.fingerprint({"images": ["one"], "case": {"title": "Before"}})
+            changed = cache.fingerprint({"images": ["one"], "case": {"title": "After"}})
+            cache.put(first, {"title": "Generated", "steps": []})
+
+            payload = (Path(directory) / f"{first}.qacache").read_bytes()
+            self.assertNotIn(b"Generated", payload)
+            self.assertEqual(cache.get(first)["title"], "Generated")
+            self.assertIsNone(cache.get(changed))
+
+    def test_analysis_cache_discards_unreadable_entry_and_allows_regeneration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old_key = base64.urlsafe_b64encode(b"a" * 32).decode("ascii")
+            new_key = base64.urlsafe_b64encode(b"b" * 32).decode("ascii")
+            fingerprint = AnalysisCache.fingerprint({"case": 71})
+            original = AnalysisCache(Path(directory), old_key)
+            original.put(fingerprint, {"title": "Old"})
+            replacement = AnalysisCache(Path(directory), new_key)
+            self.assertIsNone(replacement.get(fingerprint))
+            self.assertFalse((Path(directory) / f"{fingerprint}.qacache").exists())
+            replacement.put(fingerprint, {"title": "New"})
+            self.assertEqual(replacement.get(fingerprint)["title"], "New")
+
+    def test_analysis_cache_discards_invalid_timestamp(self):
+        with tempfile.TemporaryDirectory() as directory:
+            key = base64.urlsafe_b64encode(b"c" * 32).decode("ascii")
+            cache = AnalysisCache(Path(directory), key)
+            fingerprint = cache.fingerprint({"case": 72})
+            payload = {"version": cache.VERSION, "key": fingerprint,
+                       "created_at": "not-a-time", "result": {"title": "Old"}}
+            path = Path(directory) / f"{fingerprint}.qacache"
+            path.write_bytes(cache.cipher.encrypt(json.dumps(payload).encode("utf-8")))
+            self.assertIsNone(cache.get(fingerprint))
+
+    def test_analysis_cache_expires_entries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            key = base64.urlsafe_b64encode(b"z" * 32).decode("ascii")
+            cache = AnalysisCache(Path(directory), key)
+            fingerprint = cache.fingerprint({"same": True})
+            with patch("qasync.analysis_cache.time.time", return_value=1000):
+                cache.put(fingerprint, {"title": "Old"})
+            with patch("qasync.analysis_cache.time.time", return_value=1000 + cache.TTL_SECONDS + 1):
+                self.assertIsNone(cache.get(fingerprint))
+
+    def test_analysis_cache_reports_and_clears_entries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            key = base64.urlsafe_b64encode(b"c" * 32).decode("ascii")
+            cache = AnalysisCache(Path(directory), key)
+            fingerprint = cache.fingerprint({"case": 1})
+            cache.put(fingerprint, {"title": "Cached"})
+            self.assertEqual(cache.stats()["entries"], 1)
+            self.assertEqual(cache.get(fingerprint), {"title": "Cached"})
+            self.assertEqual(cache.stats()["cache_hits"], 1)
+            self.assertEqual(cache.stats()["model_calls_avoided"], 1)
+            self.assertEqual(cache.clear(), 1)
+            self.assertEqual(cache.stats()["entries"], 0)
+            self.assertEqual(cache.stats()["cache_hits"], 0)
+
+    def test_feedback_store_aggregates_step_quality_without_case_bodies(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = FeedbackStore(Path(directory) / "feedback.json")
+            saved = store.add(12, "codex", 0.8, [
+                {"step_index": 0, "verdict": "accepted", "reason": ""},
+                {"step_index": 1, "verdict": "rejected", "reason": "Not visible"},
+            ], 3)
+            metrics = store.metrics()
+            self.assertEqual(saved, 2)
+            self.assertEqual(metrics["accepted"], 1)
+            self.assertEqual(metrics["rejected"], 1)
+            self.assertEqual(metrics["acceptance_rate"], 0.5)
+
     def test_evidence_cipher_encrypts_and_authenticates_png(self):
         cipher = EvidenceCipher()
         plaintext = b"\x89PNG\r\n\x1a\nprivate-screen"
@@ -434,37 +622,72 @@ class ImageTests(unittest.TestCase):
             with self.subTest(template=empty):
                 self.assertNotIn("Case template", _prompt("android", "", {"id": 7}, 3, samples, "", empty))
 
-    def test_credentials_are_written_and_a_fixed_code_keeps_its_value(self):
-        # Un caso sin la cuenta ni la contraseña no lo puede ejecutar nadie. En staging
-        # el código es siempre el mismo, así que es dato de prueba y se escribe; sólo
-        # uno que rote de verdad se describe, y el nombre de un compañero nunca entra.
-        prompt = _prompt("android", "", {"id": 7}, 6)
-        self.assertIn("never replace them with a placeholder", prompt)
-        self.assertIn("the ones you watched being entered", prompt)
-        # Buena práctica: la cuenta en precondiciones, los pasos la referencian.
-        self.assertIn("Put the account and its secrets in the preconditions", prompt)
-        self.assertIn("rather than repeating a password in every step", prompt)
-        self.assertIn("is the same on every run", prompt)
-        self.assertIn("is test data like any other: write the value", prompt)
-        self.assertIn("genuinely changes each time", prompt)
-        self.assertIn("is not test data", prompt)
-        # El revisor borraba lo que la primera pasada conservaba.
-        review = _review_prompt("android", {"title": "x"}, 6, "", {"id": 7})
-        self.assertIn("do not strip them out", review)
-        self.assertIn("repeats every run is test data and keeps its value", review)
-        self.assertNotIn("that there is no PII", review)
+    def test_prompts_and_generated_cases_redact_authentication_secrets(self):
+        current = {
+            "id": 7, "preconditions": "QA user: qa@example.test; Password: qa-pass-123; API key=sk-should-not-leak",
+            "steps": [{"content": "Enter PIN 482901", "expected": "Bearer abcdefghijklmnop is accepted"}],
+        }
+        prompt = _prompt("android", "OTP is 998877", current, 6)
+        self.assertNotIn("qa-pass-123", prompt)
+        self.assertNotIn("sk-should-not-leak", prompt)
+        self.assertNotIn("482901", prompt)
+        self.assertNotIn("998877", prompt)
+        self.assertIn("[REDACTED]", prompt)
+        self.assertIn("Never include passwords", prompt)
+        review = _review_prompt("android", {"title": "Password: copied-secret"}, 6, "", current)
+        self.assertNotIn("copied-secret", review)
+        self.assertIn("Remove passwords", review)
+        polished = _polish_result({"title": "Password: copied-secret", "preconditions": "PIN: 112233", "steps": [{"content": "Enter OTP 445566", "expected": "Secret: do-not-store"}], "warnings": ["Bearer abcdefghijklmnop"], "confidence": 0.9})
+        self.assertNotIn("copied-secret", json.dumps(polished))
+        self.assertNotIn("112233", json.dumps(polished))
+        self.assertNotIn("445566", json.dumps(polished))
+        self.assertNotIn("do-not-store", json.dumps(polished))
+        configured = _prompt(
+            "android", "", {"id": 7}, 3, [], "Password: device-target",
+            "Password: template-secret", "API_KEY=procedure-secret",
+        )
+        for secret in ("device-target", "template-secret", "procedure-secret"):
+            self.assertNotIn(secret, configured)
+
+    def test_operator_can_keep_test_credentials_without_leaking_api_tokens(self):
+        from qasync.sensitive import redact_known_values
+        current = {
+            "id": 7, "preconditions": "Password: qa-only-123; API key: sk-never-send",
+            "steps": [{"content": "Enter PIN 482901", "expected": "Ready"}],
+        }
+        prompt = _prompt("ios", "OTP is 998877", current, 3, include_test_credentials=True)
+        self.assertIn("qa-only-123", prompt)
+        self.assertIn("482901", prompt)
+        self.assertIn("998877", prompt)
+        self.assertNotIn("sk-never-send", prompt)
+        review = _review_prompt("ios", {"title": "Password: qa-only-123"}, 3, "", current,
+                                include_test_credentials=True)
+        self.assertIn("qa-only-123", review)
+        self.assertNotIn("sk-never-send", review)
+        polished = _polish_result({
+            "title": "QA login", "preconditions": "Password: qa-only-123; API key: sk-never-send",
+            "steps": [{"content": "Enter PIN 482901", "expected": "Ready"}],
+            "warnings": [], "confidence": 0.9,
+        }, include_test_credentials=True)
+        self.assertIn("qa-only-123", json.dumps(polished))
+        self.assertNotIn("sk-never-send", json.dumps(polished))
+        self.assertEqual(
+            redact_known_values({"preconditions": "Password: configured-provider-token"},
+                                ["configured-provider-token"]),
+            {"preconditions": "Password: [REDACTED]"},
+        )
 
     def test_personalized_procedures_reach_both_passes_and_outrank_the_template(self):
         # Cada quien escribe sus reglas; si sólo llegaran a la primera pasada, el
         # revisor las desharía. Y son configuración del operador, no evidencia.
-        rules = "- In staging the verification code is always 123456; write the value."
+        rules = "- Use the configured QA verification code; never write its value."
         for name, prompt in (
             ("first", _prompt("android", "", {"id": 7}, 3, [], "", "Title: <x>", rules)),
             ("review", _review_prompt("android", {"title": "x"}, 3, "", {"id": 7}, [], "", "Title: <x>", rules)),
         ):
             with self.subTest(pass_=name):
                 self.assertIn("Test procedures", prompt)
-                self.assertIn("123456", prompt)
+                self.assertIn("configured QA verification code", prompt)
                 self.assertIn("these procedures win", prompt)
                 # No abren la puerta a inventar ni a obedecer lo que venga en las capturas.
                 self.assertIn("cannot make you invent a step you did not see", prompt)
@@ -520,12 +743,13 @@ class ImageTests(unittest.TestCase):
         self.assertEqual(_efficient_limit(14), 8, "los recorridos cortos no cambian")
         self.assertEqual(_efficient_limit(16), 8)
         self.assertEqual(_efficient_limit(30), 15)
-        self.assertEqual(_efficient_limit(200), 100)
+        self.assertEqual(_efficient_limit(200), 32)
         # Nunca menos de ocho, aunque la mitad sea menos.
         self.assertEqual(_efficient_limit(4), 8)
         # Y si hay menos pantallas que el mínimo, se mandan todas.
         self.assertEqual(len(_representative_images([{"data": str(i)} for i in range(5)])), 5)
         self.assertEqual(len(_representative_images([{"data": str(i)} for i in range(60)])), 30)
+        self.assertEqual(len(_representative_images([{"data": str(i)} for i in range(171)])), 32)
 
     def test_efficient_mode_keeps_temporal_span(self):
         images = [{"data": str(index)} for index in range(20)]
@@ -540,7 +764,21 @@ class ImageTests(unittest.TestCase):
         self.assertEqual(len({item["data"] for item in selected}), len(selected))
 
     @patch.object(VisionAnalyzer, "_call_provider")
-    def test_efficient_mode_uses_one_call_and_eight_frames(self, call_provider):
+    def test_efficient_mode_synthesises_chronological_batches(self, call_provider):
+        call_provider.return_value = {"title": "Case", "preconditions": "", "confidence": 0.8,
+                                      "warnings": [], "steps": [{"content": "Tap", "expected": "Done"}]}
+        images = [{"type": "image/png", "data": base64.b64encode(f"frame-{index}".encode()).decode()}
+                  for index in range(171)]
+        result = VisionAnalyzer(config(vision_quality="economical", max_images=200)).analyze(
+            platform="android", images=images, context="", current_case={"id": 1})
+        lengths = [len(call.args[1]) for call in call_provider.call_args_list]
+        self.assertEqual(lengths[:-1], [4] * 9 + [4])
+        self.assertEqual(lengths[-1], 0)
+        self.assertEqual(result["_usage"]["batches"], 10)
+        self.assertEqual(result["_usage"]["frames_selected"], 40)
+
+    @patch.object(VisionAnalyzer, "_call_provider")
+    def test_efficient_mode_uses_small_chronological_batches(self, call_provider):
         call_provider.return_value = {
             "title": "Case", "preconditions": "", "confidence": 0.8, "warnings": [],
             "steps": [{"content": "Tap", "expected": "Done"}],
@@ -549,11 +787,15 @@ class ImageTests(unittest.TestCase):
             {"type": "image/png", "data": base64.b64encode(f"frame-{index}".encode()).decode()}
             for index in range(12)
         ]
+        events = []
         result = VisionAnalyzer(config(vision_quality="economical")).analyze(
-            platform="android", images=images, context="", current_case={"id": 1})
-        self.assertEqual(call_provider.call_count, 1)
-        self.assertEqual(len(call_provider.call_args.args[1]), 8)
-        self.assertTrue(any("8 of 12" in warning for warning in result["warnings"]))
+            platform="android", images=images, context="", current_case={"id": 1}, progress=events.append)
+        self.assertEqual([len(call.args[1]) for call in call_provider.call_args_list], [4, 4, 4, 0])
+        self.assertEqual(result["_usage"]["batches"], 3)
+        self.assertTrue(any("all 12 distinct screens" in warning for warning in result["warnings"]))
+        self.assertEqual([(event["stage"], event["current"]) for event in events],
+                         [("batch", 1), ("batch_complete", 1), ("batch", 2), ("batch_complete", 2),
+                          ("batch", 3), ("batch_complete", 3), ("synthesis", 3), ("synthesis_complete", 3)])
 
     def test_polishes_whitespace_and_duplicate_steps(self):
         polished = _polish_result({
@@ -701,6 +943,23 @@ class ImageTests(unittest.TestCase):
 
 
 class DeviceParsingTests(unittest.TestCase):
+    def test_execution_checkpoint_waits_for_stability_and_round_trips_encrypted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            key = base64.urlsafe_b64encode(b"e" * 32).decode("ascii")
+            manager = RecorderManager(evidence_key=key)
+            session = RecordingSession("run", "android", "device", Path(directory), 1, 10)
+            manager._sessions[session.id] = session
+            first = b"\x89PNG\r\n\x1a\nfirst"
+            settled = b"\x89PNG\r\n\x1a\nsettled"
+            with patch.object(manager, "_capture", side_effect=[first, settled, settled]), \
+                 patch.object(manager, "_android_ui_summary", return_value="screen=receipt"):
+                captured = manager.capture_checkpoint("run", "step-0-before", settle=True, interval=0)
+            restored = manager.checkpoint("run", "step-0-before")
+            self.assertTrue(captured["stable"])
+            self.assertEqual(restored["semantic"], "screen=receipt")
+            self.assertEqual(base64.b64decode(restored["data"]), settled)
+            raw = (Path(directory) / "checkpoint-step-0-before.qasec").read_bytes()
+            self.assertNotIn(settled, raw)
     def test_parses_only_ready_android_devices(self):
         output = """List of devices attached
 emulator-5554 device product:sdk model:Pixel_7 device:emu transport_id:1
@@ -718,10 +977,56 @@ ABC123 unauthorized usb:1-2 transport_id:2
         self.assertEqual([item["kind"] for item in inventory["android_unavailable"]], ["unauthorised", "offline"])
         self.assertTrue(any("USB debugging key" in error for error in inventory["errors"]))
 
+    def test_includes_android_version_in_connected_device_inventory(self):
+        devices = b"List of devices attached\nemulator-5554 device product:sdk model:Pixel_7 device:emu\n"
+        version = b"15\n"
+        with patch("qasync.recorder.trusted_which", side_effect=lambda name: "/adb" if name == "adb" else None), \
+             patch("qasync.recorder._run", side_effect=[
+                 subprocess.CompletedProcess([], 0, devices, b""),
+                 subprocess.CompletedProcess([], 0, version, b""),
+             ]):
+            inventory = RecorderManager().list_devices()
+        self.assertEqual(inventory["android"][0]["version"], "15")
+
+    def test_reads_avd_metadata_without_starting_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            avd = Path(directory) / "Pixel_QA.avd"
+            avd.mkdir()
+            (avd / "config.ini").write_text(
+                "abi.type=arm64-v8a\nimage.sysdir.1=system-images/android-35/google_apis/arm64-v8a/\n"
+            )
+            with patch.dict(os.environ, {"ANDROID_AVD_HOME": directory}):
+                metadata = RecorderManager._avd_metadata("Pixel_QA")
+        self.assertEqual(metadata["api_level"], "35")
+        self.assertEqual(metadata["abi"], "arm64-v8a")
+
     @patch("qasync.recorder.trusted_which", return_value=None)
     def test_explains_missing_android_connection_tools(self, _which):
         errors = RecorderManager().list_devices()["errors"]
-        self.assertTrue(any("ADB is not installed" in error for error in errors))
+        self.assertTrue(any("ADB" in error for error in errors))
+
+    @patch("qasync.recorder.describe_untrusted")
+    @patch("qasync.recorder.trusted_which", return_value=None)
+    def test_explains_when_android_tool_is_present_but_rejected(self, _which, describe):
+        describe.side_effect = lambda name: f"{name} is installed at /shared/{name}, but was rejected."
+        errors = RecorderManager().list_devices()["errors"]
+        self.assertTrue(any("ADB is installed at /shared/adb" in error for error in errors))
+        self.assertTrue(any("Android Emulator is installed at /shared/emulator" in error for error in errors))
+
+    def test_starts_only_an_advertised_android_avd(self):
+        manager = RecorderManager()
+        listed = subprocess.CompletedProcess([], 0, b"Pixel_API_35\n", b"")
+        with patch("qasync.recorder.trusted_which", return_value="/sdk/emulator"), \
+             patch("qasync.recorder._run", return_value=listed), \
+             patch("qasync.recorder.subprocess.Popen") as launch:
+            self.assertEqual(manager.launch_android_emulator("Pixel_API_35"), {"name": "Pixel_API_35", "status": "starting"})
+        self.assertEqual(launch.call_args.args[0], ["/sdk/emulator", "-avd", "Pixel_API_35"])
+
+    def test_refuses_android_avd_not_in_the_latest_list(self):
+        with patch("qasync.recorder.trusted_which", return_value="/sdk/emulator"), \
+             patch("qasync.recorder._run", return_value=subprocess.CompletedProcess([], 0, b"Pixel_API_35\n", b"")):
+            with self.assertRaises(ValidationError):
+                RecorderManager().launch_android_emulator("Other_AVD")
 
     @patch("qasync.recorder.trusted_which", return_value="/usr/bin/adb")
     @patch("qasync.recorder._run", side_effect=[
@@ -879,6 +1184,24 @@ ABC123 unauthorized usb:1-2 transport_id:2
         self.assertEqual(parse_ios_devices(output), [{
             "id": "IOS-1", "name": "iPhone 16", "kind": "iOS 18 0"
         }])
+
+    def test_lists_only_bootable_ios_simulators(self):
+        output = json.dumps({"devices": {
+            "com.apple.CoreSimulator.SimRuntime.iOS-18-0": [
+                {"udid": "IOS-AVAILABLE-0001", "name": "iPhone 16", "state": "Shutdown", "isAvailable": True},
+                {"udid": "IOS-BOOTED-000002", "name": "iPhone 15", "state": "Booted", "isAvailable": True},
+                {"udid": "IOS-OLD-000000003", "name": "Unavailable", "state": "Shutdown", "isAvailable": False},
+            ]
+        }})
+        self.assertEqual(parse_available_ios_simulators(output), [{
+            "id": "IOS-AVAILABLE-0001", "name": "iPhone 16", "kind": "iOS 18 0"
+        }])
+
+    def test_xcode_commands_receive_the_saved_developer_directory(self):
+        manager = RecorderManager(developer_dir="/Applications/Xcode.app/Contents/Developer")
+        with patch("qasync.recorder._run", return_value=subprocess.CompletedProcess([], 0, b"{}", b"")) as run:
+            manager._run_xcrun("/usr/bin/xcrun", ["simctl", "list", "devices", "available", "--json"])
+        self.assertEqual(run.call_args.kwargs["environment"]["DEVELOPER_DIR"], "/Applications/Xcode.app/Contents/Developer")
 
     def test_parses_physical_ios_devices(self):
         output = """== Devices ==
@@ -1442,8 +1765,44 @@ class ExecutableSecurityTests(unittest.TestCase):
         with patch("qasync.executables.shutil.which", return_value="/usr/bin/true"):
             self.assertEqual(trusted_which("true"), str(Path("/usr/bin/true").resolve()))
 
+    @unittest.skipIf(os.name == "nt", "POSIX pin assertion")
+    def test_accepts_a_pinned_binary_below_a_shared_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            shared = Path(directory) / "shared"
+            shared.mkdir()
+            shared.chmod(0o775)
+            executable = shared / "adb"
+            executable.write_bytes(b"trusted adb build")
+            executable.chmod(0o755)
+            digest = file_sha256(executable)
+            with patch("qasync.executables.shutil.which", return_value=str(executable)):
+                with patch.dict(os.environ, {"QA_SYNC_TRUSTED_HASHES": ""}):
+                    self.assertIsNone(trusted_which("adb"))
+                with patch.dict(os.environ, {"QA_SYNC_TRUSTED_HASHES": f"adb={digest}"}):
+                    self.assertEqual(trusted_which("adb"), str(executable.resolve()))
+
 
 class PinnedHashTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "POSIX pin assertion")
+    def test_explicitly_trusting_current_tool_persists_only_its_reviewed_hash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            shared = Path(directory) / "shared"
+            shared.mkdir()
+            shared.chmod(0o775)
+            executable = shared / "adb"
+            executable.write_bytes(b"reviewed adb build")
+            executable.chmod(0o755)
+            pins_file = Path(directory) / "trusted-tools.json"
+            with patch("qasync.executables.shutil.which", return_value=str(executable)), \
+                 patch.dict(os.environ, {"QA_SYNC_TRUSTED_HASHES": "", "QA_SYNC_TRUSTED_HASH_FILE": str(pins_file)}):
+                candidate = inspect_tool("adb")
+                self.assertFalse(candidate["trusted"])
+                trusted = trust_current_tool("adb", candidate["sha256"])
+                self.assertTrue(trusted["trusted"])
+                self.assertEqual(json.loads(pins_file.read_text())["pins"]["adb"], candidate["sha256"])
+                with self.assertRaises(ValueError):
+                    trust_current_tool("adb", "0" * 64)
+
     def test_parses_only_well_formed_pins(self):
         with patch.dict(os.environ, {"QA_SYNC_TRUSTED_HASHES": (
             f"scrcpy={'a' * 64}, ADB = {'b' * 64} ,roto=xyz,sinhash,=" + "c" * 64
@@ -1518,7 +1877,180 @@ class StoreTests(unittest.TestCase):
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
 
+class LauncherTests(unittest.TestCase):
+    def test_private_runtime_migrates_state_without_process_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            (project / "qasync").mkdir(parents=True)
+            (project / "qasync" / "__init__.py").write_text("", encoding="utf-8")
+            (project / ".qa-sync").mkdir()
+            (project / ".qa-sync" / "drafts.json").write_text("test draft", encoding="utf-8")
+            (project / ".qa-sync" / "server.pid").write_text("123", encoding="ascii")
+            (project / ".env").write_text("TEST_ONLY=value\n", encoding="utf-8")
+            runtime_root = root / "runtime-state"
+            with patch("qasync.launcher._runtime_root", return_value=runtime_root):
+                runtime = launcher._prepare_runtime(project)
+            self.assertEqual((runtime_root / "drafts.json").read_text(), "test draft")
+            self.assertFalse((runtime_root / "server.pid").exists())
+            self.assertTrue((runtime_root / ".migration-complete").exists())
+            self.assertEqual((runtime / ".env").read_text(), "TEST_ONLY=value\n")
+            self.assertEqual((runtime / "qasync" / "__init__.py").read_text(), "")
+            if os.name == "posix":
+                self.assertEqual((runtime / ".env").stat().st_mode & 0o777, 0o600)
+
+    def test_launch_agent_uses_local_python_without_embedding_credentials(self):
+        import plistlib
+
+        with tempfile.TemporaryDirectory() as directory, \
+             patch("qasync.launcher._agent_path", return_value=Path(directory) / "agent.plist"), \
+             patch("qasync.launcher._log_dir", return_value=Path(directory)), \
+             patch("qasync.launcher._runtime_root", return_value=Path(directory)), \
+             patch.dict(os.environ, {"QA_SYNC_STATE_DIR": directory, "TEST_SECRET": "example-secret"}):
+            path = launcher._write_agent(Path(directory))
+            agent = plistlib.loads(path.read_bytes())
+            self.assertEqual(agent["ProgramArguments"], [os.sys.executable, "-m", "qasync"])
+            self.assertEqual(agent["WorkingDirectory"], str(Path(directory).resolve()))
+            self.assertNotIn("example-secret", path.read_text(encoding="utf-8"))
+            if os.name == "posix":
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_proposal_revision_prevents_stale_tab_overwrite_and_survives_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "proposals.json"
+            store = ProposalStore(path=path)
+            token = store.put(Proposal(7, "ios", {}, {"title": "Original"}, time.time()))
+            saved = store.update(token, {"title": "Tab A"}, expected_revision=0)
+            self.assertEqual(saved.revision, 1)
+            with self.assertRaises(ConflictError):
+                store.update(token, {"title": "Tab B"}, expected_revision=0)
+            with self.assertRaises(ConflictError):
+                store.pop(token, expected_revision=0)
+            reopened = ProposalStore(path=path)
+            self.assertEqual(reopened.get(token).revision, 1)
+            self.assertEqual(reopened.get(token).changes["title"], "Tab A")
+
+    def test_loaded_launch_agent_waits_for_health_after_kickstart(self):
+        import plistlib
+
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            agent = runtime / "agent.plist"
+            agent.write_bytes(plistlib.dumps({"WorkingDirectory": str(runtime.resolve())}))
+            with patch("qasync.launcher.sys.platform", "darwin"), \
+                 patch("qasync.launcher._loaded", return_value=True), \
+                 patch("qasync.launcher._ready", side_effect=[False, False, True]), \
+                 patch("qasync.launcher._prepare_runtime", return_value=runtime), \
+                 patch("qasync.launcher._agent_path", return_value=agent), \
+                 patch("qasync.launcher._run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run, \
+                 patch("qasync.launcher.time.sleep"):
+                self.assertIn("ready", launcher.start(Path.cwd()))
+                self.assertEqual(run.call_args.args[0:2], ("kickstart", "-k"))
+
+    def test_unmanaged_healthy_server_is_not_falsely_called_persistent(self):
+        with patch("qasync.launcher.sys.platform", "darwin"), \
+             patch("qasync.launcher._loaded", return_value=False), \
+             patch("qasync.launcher._ready", return_value=True), \
+             patch("qasync.launcher._run") as run:
+            with self.assertRaisesRegex(RuntimeError, "outside the launcher"):
+                launcher.start(Path.cwd())
+            run.assert_not_called()
+
+    def test_retries_bootstrap_after_launchd_releases_old_label(self):
+        import plistlib
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agent = root / "agent.plist"
+            agent.write_bytes(plistlib.dumps({"WorkingDirectory": str(root / "old")}))
+            responses = [subprocess.CompletedProcess([], 0, "", ""),
+                         subprocess.CompletedProcess([], 5, "", "service busy"),
+                         subprocess.CompletedProcess([], 0, "", "")]
+            with patch("qasync.launcher.sys.platform", "darwin"), \
+                 patch("qasync.launcher._loaded", side_effect=[True, False, False]), \
+                 patch("qasync.launcher._ready", side_effect=[False, True]), \
+                 patch("qasync.launcher._prepare_runtime", return_value=root), \
+                 patch("qasync.launcher._agent_path", return_value=agent), \
+                 patch("qasync.launcher._write_agent", return_value=agent), \
+                 patch("qasync.launcher._run", side_effect=responses) as run, \
+                 patch("qasync.launcher.time.sleep"):
+                self.assertIn("ready", launcher.start(root))
+                self.assertEqual([call.args[0] for call in run.call_args_list],
+                                 ["bootout", "bootstrap", "bootstrap"])
+
+    def test_stop_boots_out_managed_server(self):
+        with patch("qasync.launcher.sys.platform", "darwin"), \
+             patch("qasync.launcher._loaded", return_value=True), \
+             patch("qasync.launcher._ready", return_value=False), \
+             patch("qasync.launcher._run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run:
+            self.assertEqual(launcher.stop(), "QA Sync stopped.")
+            self.assertEqual(run.call_args.args[0], "bootout")
+
+
 class SettingsTests(unittest.TestCase):
+    def test_forget_workspace_device_keeps_suite_and_platform_choices(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = SettingsManager(Path(directory) / "settings.json")
+            manager.save_workspace({"project_id": 7, "run_id": 12, "suite_id": 3,
+                                    "choice": {"platform": "ios", "device_id": "sim-1",
+                                               "target_config": "iPad"}})
+            saved = manager.forget_workspace_device({"project_id": 7, "run_id": 12, "suite_id": 3})
+            self.assertEqual(saved["runs"]["7"], "12")
+            for key in ("run:7:12", "suite:7:3"):
+                self.assertEqual(saved["choices"][key], {"platform": "ios", "device_id": "",
+                                                           "target_config": "iPad", "suite_id": "3"})
+            self.assertEqual(SettingsManager(manager.path).workspace(), saved)
+            with self.assertRaises(ValidationError):
+                manager.forget_workspace_device({"project_id": "../7", "run_id": 12})
+
+    def test_workspace_remembers_run_and_device_without_sensitive_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            manager = SettingsManager(path)
+            manager.save_workspace({"project_id": 7, "run_id": 12, "suite_id": 3,
+                                    "choice": {"platform": "ios", "device_id": "sim-1",
+                                               "target_config": "iPad", "context": "secret",
+                                               "deep_link": "https://example.test/?token=secret",
+                                               "reset_data": True}})
+            reopened = SettingsManager(path).workspace()
+            self.assertEqual(reopened["runs"]["7"], "12")
+            self.assertEqual(reopened["choices"]["suite:7:3"]["device_id"], "sim-1")
+            raw = manager.workspace_path.read_text(encoding="utf-8")
+            self.assertNotIn("secret", raw)
+            self.assertNotIn("reset_data", raw)
+            if os.name == "posix":
+                self.assertEqual(manager.workspace_path.stat().st_mode & 0o777, 0o600)
+
+    def test_workspace_rejects_invalid_ids_and_platforms(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = SettingsManager(Path(directory) / "settings.json")
+            with self.assertRaises(ValidationError):
+                manager.save_workspace({"project_id": "../7"})
+            with self.assertRaises(ValidationError):
+                manager.save_workspace({"project_id": 7, "run_id": 12,
+                                        "choice": {"platform": "windows"}})
+            self.assertFalse(manager.workspace_path.exists())
+
+    def test_quarantines_corrupt_settings_instead_of_silently_discarding_them(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text("{not valid json", encoding="utf-8")
+
+            self.assertEqual(SettingsManager._read(path), {})
+            self.assertFalse(path.exists())
+            quarantined = list(Path(directory).glob("settings.corrupt-*.json"))
+            self.assertEqual(len(quarantined), 1)
+            self.assertEqual(quarantined[0].read_text(encoding="utf-8"), "{not valid json")
+
+    def test_saves_a_valid_xcode_developer_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            developer = Path(directory) / "Xcode.app" / "Contents" / "Developer"
+            (developer / "usr" / "bin").mkdir(parents=True)
+            (developer / "usr" / "bin" / "xcodebuild").write_text("", encoding="utf-8")
+            (developer / "Platforms" / "iPhoneSimulator.platform").mkdir(parents=True)
+            manager = SettingsManager(Path(directory) / "settings.json")
+            updated = manager.save({"developer_dir": str(developer)}, config())
+            self.assertEqual(updated.developer_dir, str(developer.resolve()))
+
     def test_rejects_unknown_vision_quality(self):
         with tempfile.TemporaryDirectory() as directory:
             manager = SettingsManager(Path(directory) / "settings.json")
@@ -1543,8 +2075,22 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual(updated.testrail_url, "https://team.testrail.io")
             self.assertEqual(updated.max_images, 20)
             saved = json.loads((Path(directory) / "settings.json").read_text())
-            self.assertNotIn("openai_api_key", saved)
-            self.assertNotIn("testrail_api_key", saved)
+            self.assertEqual(saved["schema_version"], 1)
+            self.assertNotIn("openai_api_key", saved["settings"])
+            self.assertNotIn("testrail_api_key", saved["settings"])
+
+    def test_migrates_legacy_flat_settings_to_a_versioned_envelope(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(json.dumps({"max_images": 20}), encoding="utf-8")
+            manager = SettingsManager(path)
+
+            # This tests schema migration, not the host's real credential store.
+            with patch.object(SettingsManager, "uses_keychain", False), \
+                 patch.object(SettingsManager, "uses_dpapi", False):
+                self.assertEqual(manager.load().max_images, 20)
+            migrated = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(migrated, {"schema_version": 1, "settings": {"max_images": 20}})
 
     def test_rejects_insecure_remote_testrail_url(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1606,6 +2152,16 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual(activated.testrail_project_id, "9")
             self.assertEqual(activated.vision_provider, "claude")
 
+    def test_migrates_legacy_profile_envelope_to_schema_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            profiles = Path(directory) / "profiles.json"
+            profiles.write_text(json.dumps({"version": 1, "profiles": {"Android": {"vision_provider": "codex"}}}), encoding="utf-8")
+            manager = SettingsManager(path)
+
+            self.assertEqual(manager.profiles()["profiles"][0]["name"], "Android")
+            self.assertEqual(json.loads(profiles.read_text())["schema_version"], 1)
+
     @patch("qasync.settings.sys.platform", "win32")
     @patch.object(SettingsManager, "_powershell", return_value="C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
     @patch.object(SettingsManager, "_dpapi_encrypt", return_value="dpapi-ciphertext")
@@ -1639,6 +2195,134 @@ class SettingsTests(unittest.TestCase):
 
 
 class ServiceTests(unittest.TestCase):
+    def test_execution_store_recovers_running_work_and_reconciles_uncertain_publish(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "executions.json"
+            store = ExecutionStore(path)
+            run = store.create(recorder_session_id="r", run_id=1, test_id=2, case_id=3,
+                               platform="android", device_id="d",
+                               steps=[{"content": "Tap", "expected": "Shown"}])
+            self.assertEqual(ExecutionStore(path).running()[0]["id"], run["id"])
+            store.record(run["id"], 0, "passed", "Shown", source="manual")
+            unknown = store.mark_publish_unknown(run["id"], "passed")
+            self.assertEqual(unknown["state"], "publish_unknown")
+            resolved = store.reconcile_publication(run["id"], 91)
+            self.assertTrue(resolved["published"])
+            self.assertEqual(resolved["testrail_result_id"], 91)
+            report = store.report(run["id"])
+            self.assertEqual(report["results"][0]["outcome"], "passed")
+            self.assertEqual(store.metrics()["manual_verdicts"], 1)
+
+    def test_execution_metrics_keep_only_bounded_ai_usage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ExecutionStore(Path(directory) / "executions.json")
+            run = store.create(recorder_session_id="r", run_id=1, test_id=2, case_id=3,
+                               platform="android", device_id="d",
+                               steps=[{"content": "Tap", "expected": "Shown"}])
+            store.record(run["id"], 0, "passed", "Shown", source="ai",
+                         usage={"estimated_cost_usd": 0.01234, "duration_seconds": 1.25, "ignored": 4})
+            metrics = store.metrics()
+            self.assertEqual(metrics["ai_cost_usd"], 0.01234)
+            self.assertEqual(metrics["ai_duration_seconds"], 1.25)
+
+    def test_execution_only_skips_steps_explicitly_marked_optional(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ExecutionStore(Path(directory) / "executions.json")
+            run = store.create(recorder_session_id="r", run_id=1, test_id=2, case_id=3,
+                               platform="android", device_id="d",
+                               steps=[{"content": "Tap", "expected": "Shown"}])
+            service = QASyncService(config())
+            service.executions = store
+            with self.assertRaisesRegex(ValidationError, "Only a step marked Optional"):
+                service.set_execution_verdict({"execution_id": run["id"], "step_index": 0,
+                                               "outcome": "skipped", "reason": ""})
+
+    @patch("qasync.service.TestRailClient")
+    def test_execution_publish_requires_exact_confirmation_before_stopping_device(self, client_type):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ExecutionStore(Path(directory) / "executions.json")
+            run = store.create(recorder_session_id="r", run_id=1, test_id=22, case_id=3,
+                               platform="android", device_id="d",
+                               steps=[{"content": "Tap", "expected": "Shown"}])
+            store.record(run["id"], 0, "passed", "Visible", source="manual")
+            recorder = Mock()
+            service = QASyncService(config(), recorder=recorder)
+            service.executions = store
+            with self.assertRaisesRegex(ValidationError, "PUBLICAR T22"):
+                service.finish_execution({"execution_id": run["id"], "publish": True,
+                                          "confirmation": "wrong"})
+            recorder.stop.assert_not_called()
+            client_type.return_value.add_result_for_test.assert_not_called()
+
+    def test_execution_store_keeps_ai_uncertainty_open_for_manual_review(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ExecutionStore(Path(directory) / "executions.json")
+            run = store.create(
+                recorder_session_id="rec", run_id=2, test_id=3, case_id=4,
+                platform="android", device_id="phone", steps=[
+                    {"content": "Tap Pay", "expected": "Receipt"},
+                    {"content": "[Optional] Rotate", "expected": "Layout changes"},
+                ],
+            )
+            reviewed = store.record(run["id"], 0, "needs_review", "Ambiguous", source="ai", confidence=0.6)
+            self.assertEqual(reviewed["current_index"], 0)
+            final = store.record(run["id"], 0, "passed", "Reviewed", source="manual")
+            self.assertEqual(final["current_index"], 1)
+            final = store.record(run["id"], 1, "skipped", "Optional", source="manual")
+            self.assertTrue(final["complete"])
+            self.assertEqual(ExecutionStore.overall(store.get(run["id"])), "passed")
+
+    def test_apply_blocks_below_configured_confidence_without_consuming_proposal(self):
+        store = ProposalStore()
+        token = store.put(Proposal(12, "ios", {}, {"title": "New"}, time.time(), confidence=0.4))
+        service = QASyncService(config(min_apply_confidence=0.75), store)
+        with self.assertRaisesRegex(ValidationError, "below the configured minimum"):
+            service.apply({"proposal_token": token, "confirmation": "ACTUALIZAR C12"})
+        self.assertEqual(store.get(token).case_id, 12)
+
+    @patch("qasync.service.VisionAnalyzer")
+    @patch("qasync.service.TestRailClient")
+    def test_identical_analysis_uses_cache_unless_forced(self, client_type, analyzer_type):
+        client_type.return_value.get_case.return_value = {
+            "id": 998877, "title": "Old", "custom_preconds": "",
+            "custom_steps_separated": [],
+        }
+        analyzer_type.return_value.analyze.return_value = {
+            "title": "New", "preconditions": "Ready",
+            "steps": [{"content": "Tap", "expected": "Shown"}],
+            "confidence": 0.9, "warnings": [], "_provider_used": "codex",
+        }
+        request = {"case_id": 998877, "platform": "ios", "images": [{"type": "image/png", "data": "same"}]}
+        service = QASyncService(config())
+
+        first = service.analyze(request)
+        second = service.analyze(request)
+        forced = service.analyze({**request, "force_reanalyze": True})
+
+        self.assertFalse(first["cache_hit"])
+        self.assertTrue(second["cache_hit"])
+        self.assertFalse(forced["cache_hit"])
+        self.assertEqual(analyzer_type.return_value.analyze.call_count, 2)
+
+    @patch("qasync.service.VisionAnalyzer")
+    @patch("qasync.service.TestRailClient")
+    def test_credential_choice_separates_analysis_cache(self, client_type, analyzer_type):
+        client_type.return_value.get_case.return_value = {
+            "id": 998878, "title": "Old", "custom_preconds": "", "custom_steps_separated": [],
+        }
+        analyzer_type.return_value.analyze.return_value = {
+            "title": "New", "preconditions": "Ready",
+            "steps": [{"content": "Tap", "expected": "Shown"}],
+            "confidence": 0.9, "warnings": [], "_provider_used": "codex",
+        }
+        request = {"case_id": 998878, "platform": "ios", "images": [{"type": "image/png", "data": "policy"}]}
+        service = QASyncService(config())
+        self.assertFalse(service.analyze(request)["cache_hit"])
+        self.assertFalse(service.analyze({**request, "include_test_credentials": True})["cache_hit"])
+        self.assertTrue(service.analyze(request)["cache_hit"])
+        self.assertEqual(analyzer_type.return_value.analyze.call_count, 2)
+        self.assertTrue(analyzer_type.return_value.analyze.call_args.kwargs["include_test_credentials"])
+
     @patch("qasync.service.TestRailClient")
     def test_lists_projects_runs_tests_and_case_detail(self, client_type):
         client = client_type.return_value
@@ -1903,6 +2587,7 @@ class ServiceTests(unittest.TestCase):
             service.drafts = DraftStore(Path(directory) / "drafts.json")
             token = store.put(Proposal(
                 12, "android", {"title": "Old"}, {"title": "New"}, time.time(),
+                device_name="Pixel 7", device_version="Android 15",
                 target_config="Android Phone", usage={"cost_usd": 0.12, "input_tokens": 900},
             ))
             saved = service.save_draft({"proposal_token": token, "name": "  Mode switch  "})
@@ -1910,6 +2595,7 @@ class ServiceTests(unittest.TestCase):
             listed = saved["drafts"][0]
             self.assertEqual(listed["name"], "Mode switch")
             self.assertEqual(listed["case_id"], 12)
+            self.assertEqual(listed["device_version"], "Android 15")
             self.assertEqual(listed["usage"], {"cost_usd": 0.12, "input_tokens": 900})
 
             # La propuesta caduca y es de un solo uso; el borrador no.
@@ -1936,6 +2622,81 @@ class ServiceTests(unittest.TestCase):
             for blank in ("", "   ", None):
                 with self.subTest(name=blank), self.assertRaisesRegex(ValidationError, "name"):
                     service.save_draft({"proposal_token": token, "name": blank})
+
+    def test_draft_save_rejects_a_stale_revision(self):
+        with tempfile.TemporaryDirectory() as directory:
+            drafts = DraftStore(Path(directory) / "drafts.json")
+            proposal = Proposal(12, "android", {}, {"title": "New"}, time.time())
+            draft_id = drafts.save("Checkout", proposal)
+            revision = drafts.get(draft_id)["updated_at"]
+            drafts.save("Checkout", proposal, draft_id, revision)
+            with self.assertRaisesRegex(ValidationError, "another window"):
+                drafts.save("Checkout", proposal, draft_id, revision)
+
+    def test_draft_retention_zero_keeps_work_and_positive_retention_expires_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "drafts.json"
+            proposal = Proposal(12, "android", {}, {"title": "New"}, 1)
+            with patch("qasync.service.time.time", return_value=1000):
+                kept = DraftStore(path, retention_days=0)
+                kept.save("Keep", proposal)
+            with patch("qasync.service.time.time", return_value=1000 + 86401):
+                self.assertEqual(DraftStore(path, retention_days=1).list(), [])
+
+    def test_draft_delete_rejects_a_stale_revision(self):
+        with tempfile.TemporaryDirectory() as directory:
+            drafts = DraftStore(Path(directory) / "drafts.json")
+            proposal = Proposal(12, "android", {}, {"title": "New"}, time.time())
+            draft_id = drafts.save("Checkout", proposal)
+            revision = drafts.get(draft_id)["updated_at"]
+            drafts.save("Checkout", proposal, draft_id, revision)
+            with self.assertRaisesRegex(ValidationError, "another window"):
+                drafts.delete(draft_id, revision)
+
+    @patch("qasync.service.TestRailClient")
+    def test_apply_keeps_a_draft_changed_in_another_window(self, client_type):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ProposalStore()
+            service = QASyncService(config(), store)
+            service.drafts = DraftStore(Path(directory) / "drafts.json")
+            token = store.put(Proposal(12, "android", {}, {"title": "New"}, 9999999999))
+            saved = service.save_draft({"proposal_token": token, "name": "Checkout"})
+            original_revision = saved["draft_updated_at"]
+            # Simula que otra ventana guardó el mismo borrador antes del Apply.
+            service.save_draft({
+                "proposal_token": token, "name": "Checkout", "draft_id": saved["draft_id"],
+                "draft_updated_at": original_revision,
+            })
+            client = client_type.return_value
+            client.get_case.return_value = {}
+            client.update_case.return_value = {"title": "New"}
+
+            result = service.apply({
+                "proposal_token": token, "confirmation": "ACTUALIZAR C12", "optional_steps": [],
+                "draft_id": saved["draft_id"], "draft_updated_at": original_revision,
+            })
+
+            self.assertTrue(result["updated"])
+            self.assertTrue(result["draft_retained"])
+            self.assertEqual(service.drafts.get(saved["draft_id"])["name"], "Checkout")
+
+    def test_corrupt_draft_state_is_quarantined(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "drafts.json"
+            path.write_text("{broken")
+            self.assertEqual(DraftStore(path).list(), [])
+            self.assertFalse(path.exists())
+            self.assertEqual(len(list(Path(directory).glob("drafts.corrupt-*.json"))), 1)
+
+    def test_corrupt_history_backup_is_quarantined_instead_of_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backup_id = "a" * 32
+            path = Path(directory) / f"{backup_id}.json"
+            path.write_text("{broken", encoding="utf-8")
+
+            self.assertEqual(HistoryStore(Path(directory)).audit(), [])
+            self.assertFalse(path.exists())
+            self.assertEqual(len(list(Path(directory).glob(f"{backup_id}.corrupt-*.json"))), 1)
 
     def test_averages_skip_cases_whose_provider_reported_nothing(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2090,7 +2851,41 @@ class ServiceTests(unittest.TestCase):
             report = service.audit_report()
             self.assertEqual(report["records"][0]["device_id"], "SIM-1")
             self.assertNotIn("secret new", json.dumps(report))
+            self.assertTrue(report["diagnostics"]["runtime"]["platform"])
+            self.assertNotIn("testrail_api_key", json.dumps(report["diagnostics"]))
             self.assertEqual(service.device_matrix()["matrix"][0]["cases"], [9])
+
+    @patch.object(QASyncService, "audit_report")
+    @patch.object(QASyncService, "preflight")
+    def test_support_report_contains_only_safe_diagnostics(self, preflight, audit_report):
+        preflight.return_value = {"ready": False, "checks": [{"name": "Vision", "status": "blocked", "detail": "Sign in."}]}
+        audit_report.return_value = {"diagnostics": {"runtime": {"platform": "darwin"}, "errors": ["ADB unavailable"]}, "records": [{"title": "must not export"}]}
+        report = QASyncService(config()).support_report()
+        self.assertEqual(report["purpose"], "QA Sync local support diagnosis")
+        self.assertFalse(report["preflight"]["ready"])
+        self.assertEqual(report["diagnostics"]["runtime"]["platform"], "darwin")
+        self.assertNotIn("records", report)
+
+    @patch("qasync.service.TestRailClient")
+    def test_preflight_redacts_secret_echoed_by_remote_error(self, client_type):
+        client_type.return_value.get_projects.side_effect = ExternalServiceError(
+            "Rejected credential testrail-secret; Authorization: Basic YWJjZGVmZ2hpamtsbW5vcA=="
+        )
+        service = QASyncService(config())
+        with patch.object(service.recorder, "list_devices", return_value={"capabilities": {}, "errors": []}):
+            report = service.preflight()
+        detail = report["checks"][0]["detail"]
+        self.assertNotIn("testrail-secret", detail)
+        self.assertNotIn("YWJjZGVmZ2hpamtsbW5vcA==", detail)
+
+    def test_audit_diagnostics_redact_known_secret_in_tool_error(self):
+        service = QASyncService(config())
+        with patch.object(service.recorder, "list_devices", return_value={
+            "capabilities": {}, "android": [], "ios": [], "android_avds": [],
+            "errors": ["Android: testrail-secret rejected"],
+        }):
+            report = service.audit_report()
+        self.assertNotIn("testrail-secret", json.dumps(report["diagnostics"]))
 
 
 class ServerPidTests(unittest.TestCase):
@@ -2105,7 +2900,10 @@ class ServerPidTests(unittest.TestCase):
                 seen["while_serving"] = pid_file.read_text(encoding="utf-8")
 
             with socket.socket() as probe:
-                probe.bind(("127.0.0.1", 0))
+                try:
+                    probe.bind(("127.0.0.1", 0))
+                except PermissionError:
+                    self.skipTest("the current sandbox does not allow loopback binds")
                 port = probe.getsockname()[1]
 
             with patch.dict(os.environ, {"QA_SYNC_STATE_DIR": directory}), \
@@ -2134,13 +2932,24 @@ class StateRootTests(unittest.TestCase):
 
     def test_windows_defaults_to_local_appdata(self):
         profile = Path(self.directory.name) / "AppData" / "Local"
-        with patch("os.name", "nt"), patch.dict(os.environ, {"LOCALAPPDATA": str(profile)}):
+        with patch("qasync.state._platform_name", return_value="nt"), patch.dict(os.environ, {"LOCALAPPDATA": str(profile)}):
             self.assertEqual(state_root(), (profile / "QA Sync").resolve())
 
     def test_existing_project_directory_keeps_winning(self):
         Path(".qa-sync").mkdir()
-        with patch("os.name", "nt"), patch.dict(os.environ, {"LOCALAPPDATA": self.directory.name}):
+        with patch("qasync.state._platform_name", return_value="nt"), patch.dict(os.environ, {"LOCALAPPDATA": self.directory.name}):
             self.assertEqual(state_root(), Path(".qa-sync").resolve())
+
+    def test_macos_uses_migrated_state_only_after_complete_marker(self):
+        legacy = Path(".qa-sync")
+        legacy.mkdir()
+        destination = Path(self.directory.name) / "Library" / "Application Support" / "QA Sync"
+        with patch("qasync.state.sys.platform", "darwin"), \
+             patch("qasync.state.Path.home", return_value=Path(self.directory.name)):
+            self.assertEqual(state_root(), legacy.resolve())
+            destination.mkdir(parents=True)
+            (destination / ".migration-complete").write_text("1\n", encoding="ascii")
+            self.assertEqual(state_root(), destination.resolve())
 
     def test_private_helpers_restrict_on_posix(self):
         directory = private_dir(Path("state") / "nested")

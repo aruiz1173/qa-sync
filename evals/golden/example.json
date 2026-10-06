@@ -1,0 +1,10 @@
+{
+  "expected": {
+    "title": "Verify successful checkout",
+    "steps": [{"content": "Tap Pay", "expected": "The receipt appears"}]
+  },
+  "actual": {
+    "title": "Verify successful checkout",
+    "steps": [{"content": "Tap Pay", "expected": "The receipt appears"}]
+  }
+}

@@ -136,3 +136,28 @@ def parse_xctrace_physical_devices(output: str) -> list[dict[str, str]]:
         match = re.match(r"(.+?)\s+\(([^()]*)\)\s+\(([0-9A-Fa-f-]{20,})\)$", line)
         if match: devices.append({"id": match.group(3), "name": match.group(1), "kind": f"physical · iOS {match.group(2)}"})
     return devices
+
+
+def parse_available_ios_simulators(output: str) -> list[dict[str, str]]:
+    """Return bootable Simulator devices, never physical devices or unavailable runtimes."""
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        return []
+    raw_devices = payload.get("devices") if isinstance(payload, dict) else None
+    if not isinstance(raw_devices, dict):
+        return []
+    simulators: list[dict[str, str]] = []
+    for runtime, items in raw_devices.items():
+        if not isinstance(runtime, str) or not isinstance(items, list):
+            continue
+        version = runtime.rsplit(".", 1)[-1].removeprefix("iOS-").replace("-", " ")
+        for item in items:
+            if not isinstance(item, dict) or not item.get("isAvailable", True):
+                continue
+            identifier, name = str(item.get("udid", "")), str(item.get("name", ""))
+            state = str(item.get("state", ""))
+            if not re.fullmatch(r"[A-Za-z0-9-]{8,100}", identifier) or not name or state == "Booted":
+                continue
+            simulators.append({"id": identifier, "name": name[:120], "kind": f"iOS {version}"})
+    return simulators

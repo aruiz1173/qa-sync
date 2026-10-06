@@ -2,7 +2,7 @@
 
 ## Purpose
 
-QA Sync is a standalone local application that converts a real Android or iOS test walkthrough into a reviewable proposal to update an existing TestRail test case.
+QA Sync is a standalone local application that converts a real Android or iOS test walkthrough into a reviewable proposal, and deterministically executes existing TestRail steps against a selected device.
 
 ## Required behavior
 
@@ -17,6 +17,11 @@ QA Sync is a standalone local application that converts a real Android or iOS te
 - Generate a title, preconditions, ordered steps, expected results, confidence, and uncertainty warnings.
 - Let the person edit, add, delete, reorder, and mark proposed steps optional before applying changes.
 - Update TestRail only after explicit confirmation and stale-case verification.
+- Execute existing steps through guided ADB or Appium/XCUITest control and capture the settled screen after each action.
+- Compare each expected result with visible evidence, require manual review below the configured confidence threshold, and permit an explicit manual override.
+- Keep encrypted before/after checkpoints per step and require a stable post-action screen plus accessibility state before accepting an automatic verdict.
+- Calculate Passed, Failed, or Blocked from final per-step verdicts. Only explicitly optional steps may be skipped.
+- Publish a test result only when the person opts in and types the exact test-specific confirmation; never retry an uncertain result write automatically.
 - Keep local encrypted evidence, recover interrupted recordings, and preserve audit/history records.
 
 ## Safety and privacy

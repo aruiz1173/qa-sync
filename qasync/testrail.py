@@ -212,6 +212,25 @@ class TestRailClient:
     def get_tests(self, run_id: int) -> list[dict[str, Any]]:
         return self._all(f"get_tests/{run_id}", "tests")
 
+    def get_statuses(self) -> list[dict[str, Any]]:
+        response = request_json(self._url("get_statuses"), headers=self._headers(), allow_list=True)
+        if isinstance(response, list):
+            return [item for item in response if isinstance(item, dict)]
+        return self._collection(response, "statuses")
+
+    def add_result_for_test(self, test_id: int, status_id: int, comment: str) -> dict[str, Any]:
+        if test_id <= 0 or status_id <= 0:
+            raise ValidationError("The TestRail test or status is invalid.")
+        return request_json(
+            self._url(f"add_result/{test_id}"), method="POST", headers=self._headers(),
+            body={"status_id": status_id, "comment": str(comment)[:8000]},
+        )
+
+    def get_results_for_test(self, test_id: int) -> list[dict[str, Any]]:
+        if test_id <= 0:
+            raise ValidationError("The TestRail test is invalid.")
+        return self._all(f"get_results_for_test/{test_id}", "results")
+
     def update_case(self, case_id: int, fields: dict[str, Any]) -> dict[str, Any]:
         return request_json(
             self._url(f"update_case/{case_id}"),

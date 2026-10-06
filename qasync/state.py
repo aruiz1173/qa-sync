@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 LEGACY_DIR = Path(".qa-sync")
+
+
+def _platform_name() -> str:
+    """Small seam so cross-platform state policy can be tested without mutating pathlib."""
+    return os.name
 
 
 def state_root() -> Path:
@@ -17,7 +23,11 @@ def state_root() -> Path:
     configured = os.getenv("QA_SYNC_STATE_DIR", "").strip()
     if configured:
         return Path(configured).resolve()
-    if os.name == "nt" and not LEGACY_DIR.exists():
+    if _platform_name() != "nt" and sys.platform == "darwin":
+        migrated = Path.home() / "Library" / "Application Support" / "QA Sync"
+        if (migrated / ".migration-complete").is_file():
+            return migrated.resolve()
+    if _platform_name() == "nt" and not LEGACY_DIR.exists():
         base = os.getenv("LOCALAPPDATA", "").strip()
         if base:
             return Path(base, "QA Sync").resolve()

@@ -15,10 +15,25 @@ from .state import private_dir, private_file, state_root
 class HistoryStore:
     """Local, atomic backups used to safely undo TestRail updates."""
 
-    def __init__(self, root: Path | None = None):
+    def __init__(self, root: Path | None = None, retention_days: int = 0):
         configured = os.getenv("QA_SYNC_HISTORY_DIR", "").strip()
         self.root = (root or (Path(configured) if configured else state_root() / "history")).resolve()
         self._lock = threading.Lock()
+        self.retention_seconds = retention_days * 86400
+        self._prune_expired()
+
+    def _prune_expired(self) -> None:
+        if not self.retention_seconds or not self.root.exists():
+            return
+        cutoff = time.time() - self.retention_seconds
+        for path in self.root.glob("*.json"):
+            if ".corrupt-" in path.name:
+                continue
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink()
+            except OSError:
+                pass
 
     def create(
         self,
@@ -70,9 +85,8 @@ class HistoryStore:
         items: list[dict[str, Any]] = []
         with self._lock:
             for path in self.root.glob("*.json"):
-                try:
-                    entry = json.loads(path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
+                entry = self._entry_from_path(path)
+                if entry is None:
                     continue
                 if entry.get("case_id") != case_id:
                     continue
@@ -97,15 +111,13 @@ class HistoryStore:
         rows: list[dict[str, Any]] = []
         with self._lock:
             for path in self.root.glob("*.json"):
-                try:
-                    entry = json.loads(path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    continue
-                if not isinstance(entry, dict):
+                entry = self._entry_from_path(path)
+                if entry is None:
                     continue
                 previous = entry.get("previous_fields") or {}
                 proposed = entry.get("applied_fields") or entry.get("proposed_fields") or {}
                 metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+                usage = metadata.get("usage") if isinstance(metadata.get("usage"), dict) else {}
                 rows.append({
                     "audit_id": entry.get("id"), "case_id": entry.get("case_id"),
                     "created_at": entry.get("created_at"), "updated_at": entry.get("updated_at"),
@@ -119,7 +131,16 @@ class HistoryStore:
                     "target_config": metadata.get("target_config", ""),
                     # Lo que informó el proveedor al generar este caso, para poder
                     # sumar el consumo real en vez de estimarlo.
-                    "usage": metadata.get("usage") if isinstance(metadata.get("usage"), dict) else {},
+                    "usage": usage,
+                    # No image bytes, OCR text, context or frame names are retained in
+                    # the report. These counters make the external-data decision
+                    # auditable without turning the audit export into evidence.
+                    "data_handling": {
+                        "recorded_frames": int(usage.get("recorded_frames", usage.get("frames_received", 0)) or 0),
+                        "selected_frames": int(usage.get("frames_selected", usage.get("frames_received", 0)) or 0),
+                        "selection_reviewed": usage.get("selection_reviewed") is True,
+                        "evidence_location": "local_encrypted",
+                    },
                 })
         return sorted(rows, key=lambda item: int(item.get("created_at") or 0), reverse=True)[:limit]
 
@@ -127,6 +148,30 @@ class HistoryStore:
         if len(backup_id) != 32 or any(character not in "0123456789abcdef" for character in backup_id):
             raise ValidationError("The backup identifier is invalid.")
         return self.root / f"{backup_id}.json"
+
+    def _entry_from_path(self, path: Path) -> dict[str, Any] | None:
+        """Read only real backup files; preserve damaged files for manual recovery."""
+        if ".corrupt-" in path.name:
+            return None
+        try:
+            entry = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            self._quarantine(path)
+            return None
+        if not isinstance(entry, dict) or entry.get("id") != path.stem:
+            self._quarantine(path)
+            return None
+        return entry
+
+    @staticmethod
+    def _quarantine(path: Path) -> None:
+        """Never silently drop a local rollback record that cannot be parsed."""
+        backup = path.with_name(f"{path.stem}.corrupt-{time.time_ns()}{path.suffix}")
+        try:
+            path.replace(backup)
+            private_file(backup)
+        except OSError:
+            pass
 
     def _load(self, backup_id: str) -> dict[str, Any]:
         try:

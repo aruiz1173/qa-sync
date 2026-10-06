@@ -1,2 +1,2 @@
 #!/bin/sh
-exec "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/start-background.sh"
+exec sh "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/start-background.sh"

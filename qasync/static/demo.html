@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Isolated, synthetic guided tour of QA Sync capabilities">
+  <title>QA Sync · Guided tour demo</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/demo.css">
+  <script src="/demo.js" defer></script>
+  <script src="/demo-execute.js" defer></script>
+</head>
+<body>
+  <header class="demo-topbar" id="demo-header">
+    <div class="demo-brand"><span class="demo-logo">QS</span><span>QA Sync</span><span class="demo-pill">ISOLATED DEMO</span></div>
+    <div class="demo-top-actions"><button id="demo-start-tour" class="button primary" type="button">Start guided tour</button><button id="demo-reset" class="button" type="button">Reset demo</button><a class="button" href="/">Back to live workspace</a></div>
+  </header>
+  <div class="demo-safety" id="demo-safety"><strong>Fictitious presentation data</strong><span>20 example cases · no TestRail connection · no device or AI calls · no real test execution</span></div>
+  <div class="demo-workspace">
+    <aside class="demo-pane demo-runs-pane" id="demo-runs-panel"><div class="pane-heading"><span class="eyebrow">EXAMPLE PROJECT</span><h1>Runs</h1><p id="demo-project-name">Loading examples…</p></div><div id="demo-runs" class="demo-list" aria-label="Example runs"></div></aside>
+    <section class="demo-pane demo-cases-pane" id="demo-cases-panel"><div class="pane-heading"><span class="eyebrow" id="demo-run-id">SELECT A RUN</span><h2 id="demo-run-title">Cases</h2><p id="demo-run-summary">Choose an example run to inspect its cases.</p><input id="demo-search" type="search" placeholder="Search example cases" aria-label="Search example cases"></div><div id="demo-cases" class="demo-list" aria-label="Example cases"></div></section>
+    <main class="demo-detail" id="demo-detail"><div class="demo-empty">Choose an example case to inspect its preconditions, steps and expected results.</div></main>
+  </div>
+  <div class="demo-bottom" id="demo-tools"><span>Explore QA Sync's other capabilities</span><div><button id="demo-open-capabilities" class="button" type="button">What QA Sync does</button><button id="demo-open-drafts" class="button" type="button">Example drafts <span id="demo-draft-count">0</span></button><button id="demo-open-matrix" class="button" type="button">Example matrix</button><button id="demo-open-quality" class="button" type="button">Demo quality</button><button id="demo-open-audit" class="button" type="button">Demo audit & export</button></div></div>
+  <dialog id="demo-modal" aria-labelledby="demo-modal-title"><div class="modal-heading"><div><span class="eyebrow">ISOLATED DEMO</span><h2 id="demo-modal-title">Details</h2></div><button id="demo-close-modal" class="button" type="button">Close</button></div><div id="demo-modal-content"></div></dialog>
+  <div id="demo-spotlight" aria-hidden="true" hidden></div>
+  <section id="demo-tour" class="demo-tour" aria-label="Guided tour of example data" hidden><div class="tour-top"><span class="eyebrow">CAPABILITIES WALKTHROUGH · EXAMPLES ONLY</span><span id="demo-tour-count"></span></div><h2 id="demo-tour-title"></h2><p id="demo-tour-text"></p><div class="tour-actions"><button id="demo-tour-exit" class="button" type="button">Exit tour</button><div><button id="demo-tour-back" class="button" type="button">Back</button><button id="demo-tour-next" class="button primary" type="button">Next</button></div></div></section>
+  <div id="demo-toast" class="demo-toast" role="status" aria-live="polite" hidden></div>
+  <noscript><div class="demo-empty">Enable JavaScript to run the isolated demo.</div></noscript>
+</body>
+</html>

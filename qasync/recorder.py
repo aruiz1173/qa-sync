@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import base64
+import binascii
+import io
 import copy
 import hashlib
 import ipaddress
 import json
+import os
 import re
 import shutil
 import struct
@@ -18,10 +21,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from PIL import Image
+
 from .appium import AppiumClient
 from .devices import (
     adb_endpoint_result, parse_adb_devices, parse_adb_mdns_services, parse_adb_tcpip_result,
-    parse_android_ip, parse_ios_devices, parse_rotation, parse_scrcpy_major,
+    parse_android_ip, parse_available_ios_simulators, parse_ios_devices, parse_rotation, parse_scrcpy_major,
     parse_touch_bounds, parse_xctrace_physical_devices,
 )
 from .errors import ExternalServiceError, ValidationError
@@ -32,9 +37,9 @@ from .state import private_dir, private_file
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
-def _run(command: list[str], timeout: float = 12) -> subprocess.CompletedProcess[bytes]:
+def _run(command: list[str], timeout: float = 12, environment: dict[str, str] | None = None) -> subprocess.CompletedProcess[bytes]:
     try:
-        return subprocess.run(command, capture_output=True, check=False, timeout=timeout)
+        return subprocess.run(command, capture_output=True, check=False, timeout=timeout, env=environment)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ExternalServiceError(f"Could not run {command[0]}: {exc}") from exc
 
@@ -49,6 +54,7 @@ class RecordingSession:
     max_frames: int
     started_at: float = field(default_factory=time.time)
     frames: list[Path] = field(default_factory=list)
+    stream_frames: int = 0
     observations: list[str] = field(default_factory=list)
     error: str = ""
     stopped: bool = False
@@ -86,8 +92,10 @@ class RecorderManager:
         ios_bundle_id: str = "",
         appium_capabilities_json: str = "{}",
         ios_devices_json: str = "[]",
+        developer_dir: str = "",
         evidence_key: str = "",
         recovery_dir: Path | None = None,
+        recovery_ttl_seconds: int = 3600,
     ):
         self.interval = interval
         self.max_frames = max_frames
@@ -98,6 +106,7 @@ class RecorderManager:
             if appium_url and ios_bundle_id else None
         )
         self.ios_bundle_id = ios_bundle_id
+        self.developer_dir = developer_dir
         try:
             configured_devices = json.loads(ios_devices_json or "[]")
         except json.JSONDecodeError:
@@ -107,6 +116,7 @@ class RecorderManager:
             "kind": f"remote · iOS {str(item.get('version', '')).strip()}".rstrip(),
         } for item in configured_devices if isinstance(item, dict) and item.get("id") and item.get("name")]
         self.recovery_dir = recovery_dir
+        self.recovery_ttl_seconds = recovery_ttl_seconds
         self._sessions: dict[str, RecordingSession] = {}
         self._scrcpy_processes: dict[str, subprocess.Popen[Any]] = {}
         self._lock = threading.Lock()
@@ -119,10 +129,15 @@ class RecorderManager:
         self._touch_state: dict[str, str] = {}
         self._restore_sessions()
 
+    def _run_xcrun(self, executable: str, arguments: list[str], timeout: float = 12) -> subprocess.CompletedProcess[bytes]:
+        environment = {**os.environ, "DEVELOPER_DIR": self.developer_dir} if self.developer_dir else None
+        return _run([executable, *arguments], timeout=timeout, environment=environment)
+
     def capabilities(self) -> dict[str, bool]:
         return {
             "adb": bool(trusted_which("adb")),
             "scrcpy": bool(trusted_which("scrcpy")),
+            "emulator": bool(trusted_which("emulator")),
             "simctl": bool(trusted_which("xcrun")),
             "appium": bool(self.appium),
             "evidence_encrypted": True,
@@ -158,24 +173,75 @@ class RecorderManager:
             self._devices_cache = (time.time(), copy.deepcopy(result))
         return {**result, "mirrors": self.mirrors()}
 
+    @staticmethod
+    def _avd_metadata(name: str) -> dict[str, str]:
+        """Read local AVD metadata without booting the emulator."""
+        configured = os.getenv("ANDROID_AVD_HOME", "").strip()
+        root = Path(configured) if configured else Path.home() / ".android" / "avd"
+        config = root / f"{name}.avd" / "config.ini"
+        try:
+            raw = config.read_text(encoding="utf-8", errors="replace")[:100_000]
+        except OSError:
+            return {}
+        values: dict[str, str] = {}
+        for line in raw.splitlines():
+            key, separator, value = line.partition("=")
+            if separator:
+                values[key.strip()] = value.strip()
+        image = values.get("image.sysdir.1", "").strip("/")
+        api = re.search(r"(?:^|/)android-(\d+)(?:/|$)", image)
+        result = {
+            "api_level": api.group(1) if api else "",
+            "abi": values.get("abi.type", "")[:40],
+            "image": image[:160],
+            "device": values.get("hw.device.name", "")[:80],
+        }
+        return {key: value for key, value in result.items() if value}
+
     def _collect_devices(self) -> dict[str, Any]:
         self._cleanup_expired()
         adb = trusted_which("adb")
         xcrun = trusted_which("xcrun")
+        emulator = trusted_which("emulator")
         caps = {
             "adb": bool(adb), "scrcpy": bool(trusted_which("scrcpy")),
-            "simctl": bool(xcrun), "appium": bool(self.appium),
+            "emulator": bool(emulator), "simctl": bool(xcrun), "appium": bool(self.appium),
             "evidence_encrypted": True,
         }
         android: list[dict[str, str]] = []
         android_unavailable: list[dict[str, str]] = []
+        android_avds: list[dict[str, str]] = []
         ios: list[dict[str, str]] = list(self.configured_ios_devices) if self.appium else []
+        ios_simulators: list[dict[str, str]] = []
         errors: list[str] = []
+
+        def tool_error(label: str, name: str) -> str:
+            """Keep the UI diagnosis precise when a present binary is rejected."""
+            detail = describe_untrusted(name)
+            if detail.startswith(f"{name} "):
+                detail = f"{label}{detail[len(name):]}"
+            return f"Android: {detail}"
+
         if adb:
             result = _run([adb, "devices", "-l"])
             if result.returncode == 0:
                 adb_output = result.stdout.decode(errors="replace")
                 android = parse_adb_devices(adb_output)
+                # La versión se muestra al elegir dispositivo, no sólo al terminar
+                # una grabación. Es una consulta corta por equipo y falla de forma
+                # aislada: un móvil lento no debe desaparecer de la lista.
+                for device in android:
+                    try:
+                        version = _run([
+                            adb, "-s", device["id"], "shell", "getprop",
+                            "ro.build.version.release",
+                        ], timeout=4)
+                    except ExternalServiceError:
+                        continue
+                    if version.returncode == 0:
+                        value = version.stdout.decode(errors="replace").strip()
+                        if value:
+                            device["version"] = value[:40]
                 for raw in adb_output.splitlines()[1:]:
                     parts = raw.strip().split()
                     if len(parts) < 2 or parts[1] == "device":
@@ -193,22 +259,36 @@ class RecorderManager:
             else:
                 errors.append("Android: ADB could not list devices.")
         else:
-            errors.append("Android: ADB is not installed, or not reachable from a trusted path.")
+            errors.append(tool_error("ADB", "adb"))
+        if emulator:
+            result = _run([emulator, "-list-avds"], timeout=15)
+            if result.returncode == 0:
+                for name in result.stdout.decode(errors="replace").splitlines():
+                    clean = name.strip()
+                    if re.fullmatch(r"[A-Za-z0-9_. -]{1,120}", clean):
+                        android_avds.append({"id": clean, "name": clean, "kind": "Android virtual device", **self._avd_metadata(clean)})
+            else:
+                errors.append("Android: the emulator tool could not list virtual devices.")
+        elif not android:
+            errors.append(tool_error("Android Emulator", "emulator"))
         if android and not caps["scrcpy"]:
             # Un scrcpy presente pero rechazado no es "no instalado": el diagnóstico
             # dice el motivo y, si es la firma, el hash que hay que fijar.
             errors.append("Android: " + describe_untrusted("scrcpy"))
         if xcrun:
-            result = _run([xcrun, "simctl", "list", "devices", "booted", "--json"])
+            result = self._run_xcrun(xcrun, ["simctl", "list", "devices", "booted", "--json"])
             if result.returncode == 0:
                 local_ios = parse_ios_devices(result.stdout.decode(errors="replace"))
                 known = {item["id"] for item in ios}
                 ios.extend(item for item in local_ios if item["id"] not in known)
             else:
                 errors.append("iOS: Xcode could not list booted simulators.")
+            available = self._run_xcrun(xcrun, ["simctl", "list", "devices", "available", "--json"])
+            if available.returncode == 0:
+                ios_simulators = parse_available_ios_simulators(available.stdout.decode(errors="replace"))
             if self.appium:
                 try:
-                    physical = _run([xcrun, "xctrace", "list", "devices"])
+                    physical = self._run_xcrun(xcrun, ["xctrace", "list", "devices"])
                     if physical.returncode == 0:
                         known = {item["id"] for item in ios}
                         ios.extend(item for item in parse_xctrace_physical_devices(
@@ -220,8 +300,51 @@ class RecorderManager:
             errors.append("iOS: Xcode/simctl is unavailable and no remote Appium devices are configured.")
         return {
             "android": android, "android_unavailable": android_unavailable,
-            "ios": ios, "capabilities": caps, "errors": errors,
+            "android_avds": android_avds, "ios": ios, "ios_simulators": ios_simulators,
+            "capabilities": caps, "errors": errors,
         }
+
+    def launch_android_emulator(self, avd_name: object) -> dict[str, str]:
+        """Start one operator-selected AVD with its window visible on macOS or Windows."""
+        name = str(avd_name or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_. -]{1,120}", name):
+            raise ValidationError("Select a valid Android virtual device.")
+        executable = trusted_which("emulator")
+        if not executable:
+            raise ValidationError(describe_untrusted("emulator"))
+        result = _run([executable, "-list-avds"], timeout=15)
+        available = {line.strip() for line in result.stdout.decode(errors="replace").splitlines()}
+        if result.returncode or name not in available:
+            raise ValidationError("That Android virtual device is no longer available. Refresh the list.")
+        try:
+            subprocess.Popen([executable, "-avd", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as exc:
+            raise ExternalServiceError(f"The Android emulator could not start: {exc}") from exc
+        self.invalidate_devices()
+        return {"name": name, "status": "starting"}
+
+    def launch_ios_simulator(self, simulator_id: object) -> dict[str, str]:
+        """Boot a selected local iOS Simulator. This is intentionally macOS-only."""
+        identifier = str(simulator_id or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9-]{8,100}", identifier):
+            raise ValidationError("Select a valid iOS Simulator.")
+        xcrun = trusted_which("xcrun")
+        if not xcrun:
+            raise ValidationError("iOS Simulator needs macOS with Xcode installed.")
+        result = self._run_xcrun(xcrun, ["simctl", "list", "devices", "available", "--json"], timeout=20)
+        available = parse_available_ios_simulators(result.stdout.decode(errors="replace")) if result.returncode == 0 else []
+        if identifier not in {item["id"] for item in available}:
+            raise ValidationError("That iOS Simulator is unavailable. Refresh the list.")
+        boot = self._run_xcrun(xcrun, ["simctl", "boot", identifier], timeout=30)
+        if boot.returncode:
+            detail = (boot.stdout + boot.stderr).decode(errors="replace").strip()[:300]
+            raise ExternalServiceError(f"The iOS Simulator could not boot: {detail}")
+        try:
+            subprocess.Popen(["/usr/bin/open", "-a", "Simulator"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as exc:
+            raise ExternalServiceError(f"The Simulator app could not open: {exc}") from exc
+        self.invalidate_devices()
+        return {"id": identifier, "status": "starting"}
 
     def _scrcpy_command(self, executable: str, device_id: str) -> list[str]:
         command = [executable, "--serial", device_id, "--window-title", "QA Sync · Android"]
@@ -608,7 +731,7 @@ class RecorderManager:
             "stopped": session.stopped,
             "error": session.error,
             "limit_reached": session.stopped and (
-                len(session.frames) >= session.max_frames
+                session.stream_frames >= session.max_frames
                 or elapsed >= self.max_duration
             ),
             "remote_control": bool(
@@ -654,6 +777,147 @@ class RecorderManager:
         ]
         return images, "\n".join(session.observations), session.platform
 
+    def evidence_preview(self, session_id: str, budget: int) -> dict[str, Any]:
+        """Return small local-only thumbnails and the proposed AI selection.
+
+        The encrypted originals never leave the evidence directory here.  The
+        browser receives JPEG thumbnails solely through the loopback API so a
+        person can remove a frame before any provider call is made.
+        """
+        self.stop(session_id)
+        if not 1 <= budget <= 200:
+            raise ValidationError("The AI screen budget must be between 1 and 200.")
+        with self._lock:
+            session = self._sessions.get(session_id)
+        if not session or not session.frames:
+            raise ValidationError("No screen was captured during the session.")
+        count = len(session.frames)
+        selected_count = min(count, budget)
+        selected = {
+            round(position * (count - 1) / (selected_count - 1)) if selected_count > 1 else 0
+            for position in range(selected_count)
+        }
+        frames: list[dict[str, Any]] = []
+        for index, path in enumerate(session.frames):
+            try:
+                with Image.open(io.BytesIO(self._read_frame(path))) as source:
+                    source = source.convert("RGB")
+                    source.thumbnail((180, 180), Image.Resampling.LANCZOS)
+                    encoded = io.BytesIO()
+                    source.save(encoded, format="JPEG", quality=68, optimize=True)
+            except (OSError, ValueError) as exc:
+                raise ValidationError("A recorded screen cannot be previewed safely.") from exc
+            frames.append({
+                "index": index,
+                "selected": index in selected,
+                "type": "image/jpeg",
+                "data": base64.b64encode(encoded.getvalue()).decode(),
+            })
+        return {"session_id": session_id, "frames": frames, "captured_frames": count,
+                "selected_frames": len(selected), "budget": budget}
+
+    def export_evidence(self, session_id: str, selected_frames: list[Any]) -> dict[str, Any]:
+        """Return explicitly selected original captures for a local-only export.
+
+        This intentionally does not call a provider or TestRail.  The caller is
+        responsible for turning the returned JSON into a user-initiated local
+        download; originals remain encrypted at rest until that moment.
+        """
+        self.stop(session_id)
+        with self._lock:
+            session = self._sessions.get(session_id)
+        if not session or not session.frames:
+            raise ValidationError("No screen was captured during the session.")
+        if not isinstance(selected_frames, list):
+            raise ValidationError("Choose the screens to export.")
+        indices: list[int] = []
+        for value in selected_frames:
+            if isinstance(value, bool):
+                raise ValidationError("A selected screen index is invalid.")
+            try:
+                index = int(value)
+            except (TypeError, ValueError) as exc:
+                raise ValidationError("A selected screen index is invalid.") from exc
+            if index < 0 or index >= len(session.frames):
+                raise ValidationError("A selected screen is no longer available.")
+            if index not in indices:
+                indices.append(index)
+        if not indices:
+            raise ValidationError("Select at least one screen to export.")
+        if len(indices) > 200:
+            raise ValidationError("Export at most 200 screens at a time.")
+        images = [
+            {
+                "index": index,
+                "name": session.frames[index].name,
+                "type": "image/png",
+                "data": base64.b64encode(self._read_frame(session.frames[index])).decode(),
+            }
+            for index in indices
+        ]
+        return {
+            "session_id": session_id,
+            "case_id": session.case_id,
+            "platform": session.platform,
+            "captured_frames": len(session.frames),
+            "selected_frames": len(images),
+            "frames": images,
+        }
+
+    def import_evidence(self, payload: Any, case_id: int | None = None) -> dict[str, Any]:
+        """Store a user-selected evidence package as an encrypted stopped session.
+
+        Imported evidence is deliberately disconnected from devices.  It can be
+        reviewed and analysed later, but cannot control an old device session.
+        """
+        if not isinstance(payload, dict) or payload.get("mode") != "evidence_only":
+            raise ValidationError("Choose a QA Sync evidence-only export.")
+        platform = str(payload.get("platform", "")).lower()
+        frames = payload.get("frames")
+        if platform not in {"android", "ios"} or not isinstance(frames, list):
+            raise ValidationError("The evidence package is incomplete.")
+        if not 1 <= len(frames) <= 200:
+            raise ValidationError("An evidence package must contain 1 to 200 screens.")
+        session_id = uuid.uuid4().hex
+        if self.recovery_dir:
+            private_dir(self.recovery_dir)
+            directory = private_dir(self.recovery_dir / session_id)
+        else:
+            directory = Path(tempfile.mkdtemp(prefix="qa-sync-imported-evidence-"))
+        session = RecordingSession(
+            id=session_id, platform=platform, device_id="imported-evidence",
+            directory=directory, interval=self.interval, max_frames=max(self.max_frames, len(frames)),
+            case_id=case_id, stopped=True, ended_at=time.time(),
+        )
+        try:
+            for position, item in enumerate(frames, start=1):
+                if not isinstance(item, dict) or item.get("type") != "image/png":
+                    raise ValidationError("An imported screen is not a PNG image.")
+                encoded = item.get("data")
+                if not isinstance(encoded, str) or len(encoded) > 16_000_000:
+                    raise ValidationError("An imported screen is too large.")
+                try:
+                    image = base64.b64decode(encoded, validate=True)
+                    with Image.open(io.BytesIO(image)) as source:
+                        source.verify()
+                        width, height = source.size
+                except (ValueError, OSError, binascii.Error) as exc:
+                    raise ValidationError("An imported screen could not be verified safely.") from exc
+                if not image.startswith(PNG_SIGNATURE) or not 1 <= width <= 10_000 or not 1 <= height <= 10_000:
+                    raise ValidationError("An imported screen has invalid dimensions.")
+                path = directory / f"frame-{position:03d}.qasec"
+                path.write_bytes(self.evidence_cipher.encrypt(image))
+                private_file(path)
+                session.frames.append(path)
+            self._append_observation(session, "Imported local evidence package; no device was connected.")
+            with self._lock:
+                self._sessions[session_id] = session
+            self._persist(session)
+        except Exception:
+            shutil.rmtree(directory, ignore_errors=True)
+            raise
+        return self.status(session_id)
+
     def discard(self, session_id: str) -> None:
         with self._lock:
             session = self._sessions.pop(session_id, None)
@@ -664,6 +928,37 @@ class RecorderManager:
             self._close_scrcpy(session.device_id)
             self._set_show_touches(session.device_id, False, session.hardware_serial)
             shutil.rmtree(session.directory, ignore_errors=True)
+
+    def protect(self, session_id: str) -> None:
+        """Pin encrypted evidence while a deferred QA job refers to it."""
+        with self._lock:
+            session = self._sessions.get(session_id)
+        if not session or not session.stopped or not session.frames:
+            raise ValidationError("Stop a recording with captured screens before queuing it.")
+        marker = session.directory / ".deferred"
+        marker.write_text("Queued locally; remove through QA Sync.\n", encoding="utf-8")
+        private_file(marker)
+
+    def include_execution_checkpoints(self, session_id: str) -> int:
+        """Attach encrypted per-step captures to the timeline after Execute finishes."""
+        with self._lock:
+            session = self._sessions.get(session_id)
+        if not session or not session.stopped:
+            raise ValidationError("Finish the execution recording before attaching its checkpoints.")
+        existing = set(session.frames)
+        added = [path for path in session.directory.glob("checkpoint-step-*.qasec")
+                 if path not in existing and re.fullmatch(r"checkpoint-step-[0-9]+-(before|after)\.qasec", path.name)]
+        if added:
+            session.frames = sorted([*session.frames, *added], key=lambda path: (path.stat().st_mtime_ns, path.name))
+            self._append_observation(session, f"Attached {len(added)} deterministic step checkpoint screens.")
+            self._persist(session)
+        return len(added)
+
+    def unprotect(self, session_id: str) -> None:
+        with self._lock:
+            session = self._sessions.get(session_id)
+        if session:
+            (session.directory / ".deferred").unlink(missing_ok=True)
 
     def cancel(self, session_id: str) -> None:
         with self._lock:
@@ -699,11 +994,12 @@ class RecorderManager:
             return any(not session.stopped for session in self._sessions.values())
 
     def _cleanup_expired(self) -> None:
-        cutoff = time.time() - 3600
+        cutoff = time.time() - self.recovery_ttl_seconds
         with self._lock:
             expired = [
                 session_id for session_id, session in self._sessions.items()
                 if session.stopped and (session.ended_at or session.started_at) < cutoff
+                and not (session.directory / ".deferred").exists()
             ]
         for session_id in expired:
             self.discard(session_id)
@@ -761,6 +1057,7 @@ class RecorderManager:
             path.write_bytes(self.evidence_cipher.encrypt(image))
             private_file(path)
             session.frames.append(path)
+            session.stream_frames += 1
             session.last_digest = digest
             elapsed = time.time() - session.started_at
         # Los dumps del dispositivo tardan hasta segundos; van fuera del lock para que el
@@ -796,8 +1093,8 @@ class RecorderManager:
             executable = trusted_which("xcrun")
             if not executable:
                 raise ExternalServiceError("Xcode is not reachable from a trusted path.")
-            result = _run([
-                executable, "simctl", "io", session.device_id, "screenshot", "--type=png", str(target)
+            result = self._run_xcrun(executable, [
+                "simctl", "io", session.device_id, "screenshot", "--type=png", str(target)
             ])
             image = target.read_bytes() if result.returncode == 0 and target.exists() else b""
             target.unlink(missing_ok=True)
@@ -833,6 +1130,160 @@ class RecorderManager:
             "type": "image/png", "data": base64.b64encode(image).decode(),
             "logical_width": width, "logical_height": height,
         }
+
+    def semantic_context(self, session_id: str) -> str:
+        with self._lock:
+            session = self._sessions.get(session_id)
+        if not session or session.stopped:
+            raise ValidationError("Guided control is not available for this session.")
+        summary = self._android_ui_summary(session) if session.platform == "android" else self._ios_ui_summary(session)
+        return str(summary or "")[:3000]
+
+    def ui_locators(self, session_id: str) -> dict[str, Any]:
+        """Return short-lived locator suggestions from the live accessibility tree.
+
+        These are never persisted as evidence and are deliberately suggestions:
+        a human still chooses whether an app identifier is stable enough to use.
+        """
+        with self._lock:
+            session = self._sessions.get(session_id)
+        if not session or session.stopped:
+            raise ValidationError("Guided control is not available for this session.")
+        if session.platform == "android":
+            return {"platform": "android", "locators": self._android_ui_locators(session)}
+        return {"platform": "ios", "locators": self._ios_ui_locators(session)}
+
+    def _android_ui_locators(self, session: RecordingSession) -> list[dict[str, str]]:
+        executable = trusted_which("adb")
+        if not executable:
+            return []
+        try:
+            result = _run([executable, "-s", session.device_id, "exec-out", "uiautomator", "dump", "/dev/tty"], timeout=8)
+        except ExternalServiceError:
+            return []
+        if result.returncode or len(result.stdout) > 2 * 1024 * 1024 or b"<!" in result.stdout.lower():
+            return []
+        start = result.stdout.find(b"<hierarchy")
+        if start < 0:
+            return []
+        try:
+            root = ElementTree.fromstring(result.stdout[start:])
+        except ElementTree.ParseError:
+            return []
+        locators: list[dict[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for node in root.iter("node"):
+            raw_id = node.attrib.get("resource-id", "").strip()
+            raw_label = node.attrib.get("content-desc", "").strip()
+            if raw_id:
+                strategy, value = "id", raw_id
+            elif raw_label:
+                strategy, value = "accessibility id", raw_label
+            else:
+                continue
+            key = (strategy, value)
+            if key in seen:
+                continue
+            seen.add(key)
+            locators.append({"strategy": strategy, "value": value[:200],
+                             "label": _redacted_label(raw_label or node.attrib.get("text", ""))[:100],
+                             "type": node.attrib.get("class", "").rsplit(".", 1)[-1][:80]})
+            if len(locators) == 25:
+                break
+        return locators
+
+    def _ios_ui_locators(self, session: RecordingSession) -> list[dict[str, str]]:
+        if not session.appium_session_id or not self.appium:
+            return []
+        try:
+            source = self.appium.source(session.appium_session_id)
+        except ExternalServiceError:
+            return []
+        if not source or len(source) > 2 * 1024 * 1024 or "<!" in source.lower():
+            return []
+        try:
+            root = ElementTree.fromstring(source)
+        except ElementTree.ParseError:
+            return []
+        locators: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for node in root.iter():
+            identifier = (node.attrib.get("name") or node.attrib.get("identifier") or "").strip()
+            if not identifier or identifier in seen:
+                continue
+            seen.add(identifier)
+            locators.append({"strategy": "accessibility id", "value": identifier[:200],
+                             "label": _redacted_label(node.attrib.get("label") or node.attrib.get("value") or "")[:100],
+                             "type": node.attrib.get("type", node.tag).replace("XCUIElementType", "")[:80]})
+            if len(locators) == 25:
+                break
+        return locators
+
+    def capture_checkpoint(self, session_id: str, label: str, *, settle: bool = False,
+                           timeout: float = 8.0, interval: float = 0.35) -> dict[str, Any]:
+        """Capture an encrypted named state, optionally waiting for two equal observations.
+
+        Exact equality is intentionally conservative: an animation may time out and
+        force manual review, but an unstable screen is never advertised as settled.
+        """
+        with self._lock:
+            session = self._sessions.get(session_id)
+        if not session or session.stopped:
+            raise ValidationError("Execution evidence is not available for this session.")
+        if not re.fullmatch(r"[a-z0-9-]{1,80}", str(label)):
+            raise ValidationError("The execution checkpoint label is invalid.")
+        started = time.time()
+        previous = ""
+        stable_matches = 0
+        image = b""
+        semantic = ""
+        while True:
+            image = self._capture(session)
+            semantic = self._android_ui_summary(session) if session.platform == "android" else self._ios_ui_summary(session)
+            signature = hashlib.sha256(image + b"\0" + str(semantic).encode("utf-8", errors="replace")).hexdigest()
+            if signature == previous:
+                stable_matches += 1
+            else:
+                stable_matches = 0
+                previous = signature
+            elapsed = time.time() - started
+            if not settle or stable_matches >= 1 or elapsed >= timeout:
+                break
+            time.sleep(min(interval, max(0.0, timeout - elapsed)))
+        stable = not settle or stable_matches >= 1
+        image_path = session.directory / f"checkpoint-{label}.qasec"
+        meta_path = session.directory / f"checkpoint-{label}.json.qasec"
+        image_path.write_bytes(self.evidence_cipher.encrypt(image))
+        metadata = json.dumps({"semantic": str(semantic)[:3000], "stable": stable,
+                               "settle_seconds": round(time.time() - started, 3)},
+                              ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        meta_path.write_bytes(self.evidence_cipher.encrypt(metadata))
+        private_file(image_path)
+        private_file(meta_path)
+        return {"type": "image/png", "data": base64.b64encode(image).decode(),
+                "semantic": str(semantic)[:3000], "stable": stable,
+                "settle_seconds": round(time.time() - started, 3)}
+
+    def checkpoint(self, session_id: str, label: str) -> dict[str, Any]:
+        with self._lock:
+            session = self._sessions.get(session_id)
+        if not session:
+            raise ValidationError("Execution evidence is not available for this session.")
+        if not re.fullmatch(r"[a-z0-9-]{1,80}", str(label)):
+            raise ValidationError("The execution checkpoint label is invalid.")
+        image_path = session.directory / f"checkpoint-{label}.qasec"
+        meta_path = session.directory / f"checkpoint-{label}.json.qasec"
+        try:
+            image = self.evidence_cipher.decrypt(image_path.read_bytes())
+            metadata = json.loads(self.evidence_cipher.decrypt(meta_path.read_bytes()).decode("utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValidationError("The baseline for this step is missing or damaged; restart the step.") from exc
+        if not image.startswith(PNG_SIGNATURE) or not isinstance(metadata, dict):
+            raise ValidationError("The baseline for this step is invalid; restart the step.")
+        return {"type": "image/png", "data": base64.b64encode(image).decode(),
+                "semantic": str(metadata.get("semantic", ""))[:3000],
+                "stable": metadata.get("stable") is True,
+                "settle_seconds": float(metadata.get("settle_seconds", 0) or 0)}
 
     def perform_action(self, session_id: str, request: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
@@ -914,31 +1365,55 @@ class RecorderManager:
         if not self.recovery_dir:
             return
         private_dir(self.recovery_dir)
-        cutoff = time.time() - 3600
+        cutoff = time.time() - self.recovery_ttl_seconds
         for manifest in self.recovery_dir.glob("*/manifest.json"):
             try:
                 data = json.loads(manifest.read_text(encoding="utf-8"))
                 started_at = float(data["started_at"])
                 ended_at = float(data.get("ended_at") or started_at)
-                if ended_at < cutoff:
+                if ended_at < cutoff and not (manifest.parent / ".deferred").exists():
                     shutil.rmtree(manifest.parent, ignore_errors=True)
                     continue
                 session_id = str(data["id"])
                 if not re.fullmatch(r"[a-f0-9]{32}", session_id) or manifest.parent.name != session_id:
                     continue
                 frames = [manifest.parent / str(name) for name in data.get("frames", [])]
-                frames = [path for path in frames if path.parent == manifest.parent and path.is_file()]
+                frames = [path for path in frames if path.parent == manifest.parent and path.is_file()
+                          and not path.is_symlink()]
+                known = set(frames)
+                recovered_frames = []
+                # A hard stop can land after an authenticated frame was written
+                # but before the manifest was atomically replaced. Salvage only
+                # complete, decryptable files; never trust an incomplete write.
+                for path in sorted(manifest.parent.glob("frame-*.qasec")):
+                    if len(frames) + len(recovered_frames) >= min(200, max(1, int(data.get("max_frames", self.max_frames)))):
+                        break
+                    if path in known or path.is_symlink() or not re.fullmatch(r"frame-\d{3}\.qasec", path.name):
+                        continue
+                    try:
+                        image = self.evidence_cipher.decrypt(path.read_bytes())
+                        with Image.open(io.BytesIO(image)) as source:
+                            source.verify()
+                    except (OSError, ValueError, ValidationError, SyntaxError):
+                        continue
+                    recovered_frames.append(path)
+                frames.extend(recovered_frames)
+                frames.sort(key=lambda path: int(re.search(r"\d+", path.stem).group()) if re.search(r"\d+", path.stem) else 0)
                 session = RecordingSession(
                     id=session_id, platform=str(data["platform"]), device_id=str(data["device_id"]),
                     directory=manifest.parent, interval=self.interval,
                     max_frames=int(data.get("max_frames", self.max_frames)), started_at=started_at,
-                    frames=frames, observations=[str(item)[:5000] for item in data.get("observations", [])[:500]],
+                    frames=frames, stream_frames=int(data.get("stream_frames", len(frames))),
+                    observations=[str(item)[:5000] for item in data.get("observations", [])[:500]],
                     error=str(data.get("error", ""))[:1000], stopped=True, ended_at=ended_at,
                     last_digest=str(data.get("last_digest", "")),
                     case_id=int(data["case_id"]) if data.get("case_id") else None,
                     environment={str(key)[:80]: str(value)[:200] for key, value in data.get("environment", {}).items()} if isinstance(data.get("environment"), dict) else {},
                 )
                 self._sessions[session_id] = session
+                if recovered_frames:
+                    self._append_observation(session, f"Recovered {len(recovered_frames)} complete frame(s) after a local interruption.")
+                    self._persist(session)
             except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
                 continue
 
@@ -949,6 +1424,7 @@ class RecorderManager:
             "case_id": session.case_id,
             "started_at": session.started_at, "ended_at": session.ended_at,
             "max_frames": session.max_frames, "frames": [path.name for path in session.frames],
+            "stream_frames": session.stream_frames,
             "observations": session.observations, "error": session.error,
             "last_digest": session.last_digest,
             "environment": session.environment,

@@ -2,6 +2,10 @@
 set -eu
 
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ "$(uname -s)" = "Darwin" ]; then
+  (cd "$project_dir" && python3 -m qasync.launcher stop)
+  exit 0
+fi
 pid_file="$project_dir/.qa-sync/server.pid"
 [ -f "$pid_file" ] || exit 0
 server_pid=$(sed -n '1p' "$pid_file")

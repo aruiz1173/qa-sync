@@ -39,21 +39,29 @@ class Config:
     ios_bundle_id: str = ""
     appium_capabilities_json: str = "{}"
     ios_devices_json: str = "[]"
+    developer_dir: str = ""
     evidence_key: str = ""
     write_mode: str = "confirm"
     vision_provider: str = ""
-    codex_model: str = ""
-    claude_model: str = ""
+    codex_model: str = "gpt-5.6-sol"
+    claude_model: str = "sonnet"
     allow_provider_fallback: bool = False
     fallback_provider: str = ""
     vision_quality: str = "high"
     max_request_bytes: int = 45 * 1024 * 1024
     max_images: int = 16
+    ai_max_images: int = 40
     max_recording_seconds: int = 900
     capture_interval: float = 1.25
     hourly_rate_usd: float = 0.0
     case_template: str = ""
     test_procedures: str = ""
+    min_apply_confidence: float = 0.0
+    min_verification_confidence: float = 0.8
+    capture_retention_hours: int = 1
+    cache_retention_hours: int = 24
+    draft_retention_days: int = 0
+    history_retention_days: int = 0
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -73,20 +81,28 @@ class Config:
             ios_bundle_id=_env("IOS_BUNDLE_ID"),
             appium_capabilities_json=_env("APPIUM_CAPABILITIES_JSON", "{}"),
             ios_devices_json=_env("QA_SYNC_IOS_DEVICES_JSON", "[]"),
+            developer_dir=_env("QA_SYNC_DEVELOPER_DIR") or _env("DEVELOPER_DIR"),
             evidence_key=_env("QA_SYNC_EVIDENCE_KEY"),
             write_mode=_env("QA_SYNC_WRITE_MODE", "confirm").lower(),
             vision_provider=_env("QA_SYNC_VISION_PROVIDER").lower(),
-            codex_model=_env("QA_SYNC_CODEX_MODEL"),
-            claude_model=_env("QA_SYNC_CLAUDE_MODEL"),
+            codex_model=_env("QA_SYNC_CODEX_MODEL", "gpt-5.6-sol"),
+            claude_model=_env("QA_SYNC_CLAUDE_MODEL", "sonnet"),
             allow_provider_fallback=_env("QA_SYNC_ALLOW_PROVIDER_FALLBACK").lower() in {"1", "true", "yes"},
             fallback_provider=_env("QA_SYNC_FALLBACK_PROVIDER").lower(),
             vision_quality=_env("QA_SYNC_VISION_QUALITY", "high").lower(),
             max_images=_env_int("QA_SYNC_MAX_IMAGES", 16),
+            ai_max_images=_env_int("QA_SYNC_AI_MAX_IMAGES", 40),
             max_recording_seconds=_env_int("QA_SYNC_MAX_RECORDING_SECONDS", 900),
             capture_interval=_env_float("QA_SYNC_CAPTURE_INTERVAL", 1.25),
             hourly_rate_usd=_env_float("QA_SYNC_HOURLY_RATE_USD", 0.0),
             case_template=_env("QA_SYNC_CASE_TEMPLATE"),
             test_procedures=_env("QA_SYNC_TEST_PROCEDURES"),
+            min_apply_confidence=_env_float("QA_SYNC_MIN_APPLY_CONFIDENCE", 0.0),
+            min_verification_confidence=_env_float("QA_SYNC_MIN_VERIFICATION_CONFIDENCE", 0.8),
+            capture_retention_hours=_env_int("QA_SYNC_CAPTURE_RETENTION_HOURS", 1),
+            cache_retention_hours=_env_int("QA_SYNC_CACHE_RETENTION_HOURS", 24),
+            draft_retention_days=_env_int("QA_SYNC_DRAFT_RETENTION_DAYS", 0),
+            history_retention_days=_env_int("QA_SYNC_HISTORY_RETENTION_DAYS", 0),
         )
 
     @property
@@ -122,5 +138,8 @@ class Config:
             "allow_provider_fallback": self.allow_provider_fallback,
             "fallback_provider": self.fallback_provider,
             "vision_quality": self.vision_quality,
+            "ai_max_images": self.ai_max_images,
             "capture_interval": self.capture_interval,
+            "min_apply_confidence": self.min_apply_confidence,
+            "min_verification_confidence": self.min_verification_confidence,
         }
