@@ -1930,6 +1930,7 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(reopened.get(token).revision, 1)
             self.assertEqual(reopened.get(token).changes["title"], "Tab A")
 
+    @unittest.skipIf(os.name == "nt", "launchd only exists on macOS")
     def test_loaded_launch_agent_waits_for_health_after_kickstart(self):
         import plistlib
 
@@ -1956,6 +1957,7 @@ class LauncherTests(unittest.TestCase):
                 launcher.start(Path.cwd())
             run.assert_not_called()
 
+    @unittest.skipIf(os.name == "nt", "launchd only exists on macOS")
     def test_retries_bootstrap_after_launchd_releases_old_label(self):
         import plistlib
         with tempfile.TemporaryDirectory() as directory:
@@ -1977,6 +1979,7 @@ class LauncherTests(unittest.TestCase):
                 self.assertEqual([call.args[0] for call in run.call_args_list],
                                  ["bootout", "bootstrap", "bootstrap"])
 
+    @unittest.skipIf(os.name == "nt", "launchd only exists on macOS")
     def test_stop_boots_out_managed_server(self):
         with patch("qasync.launcher.sys.platform", "darwin"), \
              patch("qasync.launcher._loaded", return_value=True), \
@@ -2944,7 +2947,8 @@ class StateRootTests(unittest.TestCase):
         legacy = Path(".qa-sync")
         legacy.mkdir()
         destination = Path(self.directory.name) / "Library" / "Application Support" / "QA Sync"
-        with patch("qasync.state.sys.platform", "darwin"), \
+        with patch("qasync.state._platform_name", return_value="posix"), \
+             patch("qasync.state.sys.platform", "darwin"), \
              patch("qasync.state.Path.home", return_value=Path(self.directory.name)):
             self.assertEqual(state_root(), legacy.resolve())
             destination.mkdir(parents=True)
